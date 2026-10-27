@@ -70,6 +70,10 @@ data rather than the upstream image's unrelated curl/brotli tools. Actual image
 SBOMs and strict high/critical vulnerability gates remain mandatory after any
 change; base selection alone is not evidence of a clean scan.
 
+The final application image contains no package installer. Dependency consistency
+is checked during the locked build, and CI verifies the final installed
+distributions against that lock. Dependency updates require an image rebuild.
+
 Caddy access logging is disabled and its global runtime error logger removes the
 entire request object. This also protects token-bearing URLs when an upstream
 fails. CI deliberately causes a loopback upstream outage and checks that the error

@@ -1,5 +1,7 @@
 # Supported deployment target: CPython 3.12, Linux amd64.
 # requirements.txt contains the resolved, hash-verified production environment.
+# Installer is locked for the build and removed from the final application image.
+pip>=26.2.2,<27
 fastapi>=0.111,<1
 Jinja2>=3.1.6,<4
 PyYAML>=6.0.2,<7

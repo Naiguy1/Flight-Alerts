@@ -135,6 +135,39 @@ class DeliveryService:
             and outbound >= now.date() and returning > outbound
         )
 
+    def _unexpired(self, rows: list[dict], now: datetime, filters: dict) -> list[dict]:
+        """Prune expired content using the clock and policy at the send boundary."""
+        current = []
+        freshness = int(filters.get("freshness_hours", 24))
+        for row in rows:
+            kind = row["kind"]
+            if kind == "deal":
+                if not self._fresh(row, now, freshness):
+                    self._cancel([row], "fare_expired")
+                    continue
+            elif kind == "digest":
+                items = row["payload"].get("deals", [])
+                if not isinstance(items, list) or len(items) > 100:
+                    raise ValueError("Invalid digest payload")
+                items = [item for item in items if self._fresh(
+                    {"payload": item, "created_at": row["created_at"]}, now, freshness,
+                )]
+                if not items:
+                    self._cancel([row], "fare_expired")
+                    continue
+                row["payload"]["deals"] = items
+            elif kind == "status":
+                try:
+                    created = _utc_datetime(row["created_at"])
+                except (ValueError, TypeError, KeyError):
+                    self._cancel([row], "invalid_status_payload")
+                    continue
+                if not now - timedelta(hours=6) <= created <= now + timedelta(minutes=5):
+                    self._cancel([row], "status_expired")
+                    continue
+            current.append(row)
+        return current
+
     def _prepare(self, rows: list[dict], recipient: dict) -> tuple[str, str, str, str | None]:
         kind = rows[0]["kind"]
         recipient_id = int(recipient["id"])
@@ -195,15 +228,14 @@ class DeliveryService:
             if delay:
                 self._defer(rows, delay)
                 return 0
+        try:
+            rows = self._unexpired(rows, now, filters)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            self._outcome(rows, False, "invalid_notification_payload", retryable=False)
+            return 0
+        if not rows:
+            return 0
         if kind == "deal":
-            fresh, stale = [], []
-            for row in rows:
-                (fresh if self._fresh(row, now, int(filters.get("freshness_hours", 24))) else stale).append(row)
-            if stale:
-                self._cancel(stale, "fare_expired")
-            rows = fresh
-            if not rows:
-                return 0
             if digest:
                 first_created = min(_utc_datetime(row["created_at"]) for row in rows)
                 interval = timedelta(hours=int(filters.get("digest_interval_hours", 6)))
@@ -214,31 +246,6 @@ class DeliveryService:
                 if remaining > 0:
                     self._defer(rows, remaining + 1)
                     return 0
-        if kind == "digest":
-            try:
-                payloads = rows[0]["payload"].get("deals", [])
-                if not isinstance(payloads, list) or len(payloads) > 100:
-                    raise ValueError("Invalid digest payload")
-                payloads = [payload for payload in payloads if self._fresh(
-                    {"payload": payload, "created_at": rows[0]["created_at"]},
-                    now, int(filters.get("freshness_hours", 24)),
-                )]
-                if not payloads:
-                    self._cancel(rows, "fare_expired")
-                    return 0
-                rows[0]["payload"]["deals"] = payloads
-            except (ValueError, TypeError, KeyError, AttributeError):
-                self._outcome(rows, False, "invalid_notification_payload", retryable=False)
-                return 0
-        if kind == "status":
-            try:
-                created = _utc_datetime(rows[0]["created_at"])
-                if not now - timedelta(hours=6) <= created <= now + timedelta(minutes=5):
-                    self._cancel(rows, "status_expired")
-                    return 0
-            except (ValueError, TypeError, KeyError):
-                self._cancel(rows, "invalid_status_payload")
-                return 0
         if self.revalidate is not None and kind in {"deal", "digest"}:
             approved = []
             claimed = list(rows)
@@ -277,17 +284,6 @@ class DeliveryService:
             if not rows:
                 return 0
         try:
-            # A digest may have revalidated several fares. Re-evaluate age using
-            # the current clock, rather than a timestamp captured before network
-            # activity. Refreshed callbacks may update observed_at in the payload.
-            now = _utc_datetime(self.clock())
-            if kind == "deal":
-                fresh_rows = [row for row in rows if self._fresh(row, now, int(filters.get("freshness_hours", 24)))]
-                self._cancel([row for row in rows if row not in fresh_rows], "fare_expired")
-                rows = fresh_rows
-                if not rows:
-                    return 0
-            subject, plain, body_html, unsubscribe = self._prepare(rows, recipient)
             # Recheck consent immediately before the network side effect. An
             # already-in-flight SMTP delivery cannot be withdrawn atomically.
             current = self.db.get_recipient(recipient["id"])
@@ -316,6 +312,9 @@ class DeliveryService:
             if not current or not current.get("enabled") or (kind != "verification" and not current.get("verified")):
                 self._cancel(rows, "recipient_disabled")
                 return 0
+            if kind == "verification" and current.get("verified"):
+                self._cancel(rows, "already_verified")
+                return 0
             latest_filters = self.config_getter().get("filters", {})
             if kind != "verification":
                 if latest_filters.get("alerts_paused", False):
@@ -325,12 +324,19 @@ class DeliveryService:
                 if delay:
                     self._defer(rows, delay)
                     return 0
+            # Revalidation and quota pacing can advance the clock or change the
+            # policy. Render only after the final freshness check, including each
+            # explicit digest item, so removed fares cannot remain in the body.
+            rows = self._unexpired(rows, _utc_datetime(self.clock()), latest_filters)
+            if not rows:
+                return 0
+            subject, plain, body_html, unsubscribe = self._prepare(rows, current)
             self.notifier.send_message(current["email"], subject, plain, body_html, unsubscribe)
         except DeliveryError as exc:
             self._outcome(rows, False, exc.category, retryable=exc.retryable, digest=digest and kind == "deal")
             logger.warning("notification_delivery_failed", extra={"category": exc.category, "delivery_id": rows[0]["id"]})
             return 0
-        except (ValueError, TypeError, KeyError, OverflowError):
+        except (ValueError, TypeError, KeyError, OverflowError, AttributeError):
             self._outcome(rows, False, "invalid_notification_payload", retryable=False, digest=digest and kind == "deal")
             logger.warning("notification_payload_rejected", extra={"delivery_id": rows[0]["id"]})
             return 0

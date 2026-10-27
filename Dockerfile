@@ -5,7 +5,8 @@ COPY requirements.txt requirements-scraper.txt ./
 ARG INSTALL_SCRAPER=false
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/python -m pip install --no-cache-dir --require-hashes -r requirements.txt \
-    && if [ "$INSTALL_SCRAPER" = "true" ]; then /opt/venv/bin/python -m pip install --no-cache-dir --require-hashes -r requirements-scraper.txt; fi
+    && if [ "$INSTALL_SCRAPER" = "true" ]; then /opt/venv/bin/python -m pip install --no-cache-dir --require-hashes -r requirements-scraper.txt; fi \
+    && /opt/venv/bin/python -m pip check
 
 FROM python:3.12-alpine@sha256:5789aa194f757888f41fa3d48e14b6feaa1b57c0af0b56fcb1372d6474d3bff0
 WORKDIR /app
@@ -32,6 +33,10 @@ COPY --chown=10001:10001 web/ web/
 COPY --chown=10001:10001 migrations/ migrations/
 COPY --chown=10001:10001 tools/ tools/
 COPY --chown=10001:10001 main.py dashboard.py settings.py config.yaml ./
+# Installation is finished. Remove both complete installer distributions,
+# including their vulnerable vendored code; retain all application metadata.
+RUN /usr/local/bin/python -m pip uninstall --yes pip \
+    && /opt/venv/bin/python -m pip uninstall --yes pip
 USER 10001:10001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD ["python", "-m", "tools.healthcheck", "worker"]

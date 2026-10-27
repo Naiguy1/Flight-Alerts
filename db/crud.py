@@ -101,7 +101,18 @@ class DatabaseManager:
             self._location = str(self.path)
         connection = self._connect()
         try:
-            connection.execute("PRAGMA journal_mode=WAL")
+            # Changing journal mode can return SQLITE_BUSY immediately when
+            # another startup connection inspects the same new database. The
+            # connection busy timeout does not cover every journal-mode race.
+            for attempt in range(4):
+                try:
+                    connection.execute("PRAGMA journal_mode=WAL")
+                    break
+                except sqlite3.OperationalError as exc:
+                    code = getattr(exc, "sqlite_errorcode", 0) & 0xff
+                    if code not in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED} or attempt == 3:
+                        raise
+                    time.sleep(0.01 * 2 ** attempt)
         finally:
             connection.close()
         with self._write() as connection:

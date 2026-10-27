@@ -6,6 +6,38 @@ to merge in a particular order. Use [the merge guide](merging.md) for the releas
 Repository controls and synthetic tests do not establish that a real host or
 external provider is production-ready.
 
+## Current status (2026-10-27)
+
+The original hardening PR [#1](https://github.com/Naiguy1/Flight-Alerts/pull/1)
+has merged. Its resulting `main` commit is
+`3c5b9e16bb89c3906b053bbab2a5d468303f2c8a`, with all four required checks passing
+and 249 tests executed without skips. Subsequent release fixes on
+`production-hardening` must pass their own checks and independent review before
+another merge. See the [release record](production-readiness.md#release-record).
+
+The follow-up fixes recheck freshness and subscription confirmation after SMTP
+quota waits, prune expired individual digest fares after revalidation, and make
+the image gate validate/publish the SBOM inventory and all vulnerability severity
+counts. No scanner gate is disabled or weakened.
+
+The expanded image report also exposed old system/virtualenv installers and a
+proxy router finding. The follow-up removes both unused runtime installers and
+pins the fixed proxy router. The remaining module-level OpenPGP advisory needs
+the [scoped package-applicability review](supply-chain.md#follow-up-finding-review-2026-10-27)
+and the CI proof that affected packages are absent.
+
+Reviewed implementation `dd2069cac8d8a0efc8aeca945787afd90102a82f` now also retries
+transient WAL initialization locks before migrations. Its locked CI suite passes
+264 tests with zero skips; the final application scan has zero vulnerabilities
+at every severity. The release record links the exact CI, SBOM and proxy
+applicability evidence. Follow-up PR #7 remains a draft for independent review
+and the remaining repository/operator gates.
+
+Release remains blocked on an eligible independent reviewer, applying/verifying
+the supplied branch protection, and the deployment operator's production-data
+restore rehearsal and host/service/staging evidence. Repository access alone
+does not provide the deployment database, host access, DNS or provider accounts.
+
 ## 1. Finish the review and release gates
 
 Owner: repository maintainer and an independent reviewer.

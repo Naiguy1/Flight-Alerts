@@ -16,8 +16,9 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 import xml.etree.ElementTree as ET
 
-from tools.ci_security_report import findings, read_report
+from tools.ci_security_report import findings, image_observations, read_report
 from tools.ci_codeql_report import scan_directory
+from tools.ci_sbom_report import inventory, proxy_assessment
 
 REPOSITORY = "Naiguy1/Flight-Alerts"
 BRANCHES = {"refs/heads/main", "refs/heads/production-hardening"}
@@ -113,13 +114,26 @@ def build_report(kind: str, folder: Path, gate_result: str) -> dict:
             sections = []
             for label, filename in (("Application image", "trivy-results.json"), ("Proxy image", "trivy-proxy-results.json")):
                 try:
-                    result = findings("trivy", read_report(folder / filename))
+                    scanner_report = read_report(folder / filename)
+                    result = findings("trivy", scanner_report)
+                    observations = image_observations(scanner_report)
                 except (OSError, ValueError, TypeError):
                     success = False
                     sections.append(label + ": required scanner report missing or malformed.")
                     continue
                 success = success and not result
                 sections.append(label + ": " + ("no release-blocking image findings" if not result else "\n" + "\n".join(result[:30])))
+                sections.append(observations)
+            try:
+                sections.append(inventory(folder / "sbom.cdx.json"))
+            except (OSError, ValueError, TypeError):
+                success = False
+                sections.append("SBOM: required component inventory missing or malformed.")
+            try:
+                sections.append(proxy_assessment(folder / "proxy-packages.txt"))
+            except (OSError, ValueError, TypeError):
+                success = False
+                sections.append("Proxy package applicability evidence missing or unsafe.")
             text = "\n\n".join(sections)
         elif kind == "CodeQL":
             result = scan_directory(folder / "codeql-results")

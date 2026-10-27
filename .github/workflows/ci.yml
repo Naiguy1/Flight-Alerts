@@ -120,7 +120,10 @@ jobs:
       - name: Inspect image permissions, installed dependencies, and excluded files
         run: |
           test "$(docker image inspect --format '{{.Config.User}}' flight-alerts:ci)" = '10001:10001'
-          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -m pip check
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -c "import importlib.metadata as m, json; print(json.dumps([{'name':d.metadata['Name'],'version':d.version} for d in m.distributions()]))" > runtime-packages.json
+          python3 -m tools.verify_lock --installed runtime-packages.json
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -c "import importlib.util; assert importlib.util.find_spec('pip') is None"
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci /usr/local/bin/python -c "import importlib.util; assert importlib.util.find_spec('pip') is None"
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -c "from pathlib import Path; assert not any(Path('/app').glob('.env*')); assert not Path('/app/.git').exists()"
       - name: Verify runtime imports and timezone data
         run: docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -c "import ssl, sqlite3, yaml, fastapi; from zoneinfo import ZoneInfo; ZoneInfo('America/Denver')"
@@ -135,6 +138,7 @@ jobs:
           platforms: linux/amd64
       - name: Validate proxy under actual capability and filesystem restrictions
         run: |
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint cat flight-alerts-proxy:ci /usr/share/flight-alerts/proxy-packages.txt > proxy-packages.txt
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts-proxy:ci caddy version
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
             --tmpfs /data:rw,noexec,nosuid,size=16m,uid=10001,gid=10001,mode=0700 \
@@ -181,6 +185,8 @@ jobs:
           format: cyclonedx
           output: sbom.cdx.json
           scanners: vuln
+      - name: Validate and inspect SBOM package inventory
+        run: python3 -m tools.ci_sbom_report sbom.cdx.json --proxy-packages proxy-packages.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: image-sbom

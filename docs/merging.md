@@ -2,6 +2,10 @@
 
 ## Branches and prerequisites
 
+The initial hardening PR #1 has already merged at
+`3c5b9e16bb89c3906b053bbab2a5d468303f2c8a`. Use this procedure for the release
+follow-up on `production-hardening`; do not attempt to merge the closed PR again.
+
 Merge **`production-hardening` into `main`** through a pull request. All hardening,
 feature, and architecture changes are consolidated on that branch; there are no
 separate agent branches requiring ordered merges. `main` remains the production
