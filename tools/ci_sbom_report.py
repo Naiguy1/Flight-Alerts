@@ -47,12 +47,31 @@ def inventory(path: Path) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
+    parser.add_argument("--proxy-packages", type=Path)
     args = parser.parse_args()
     try:
         summary = inventory(args.report)
+        if args.proxy_packages is not None:
+            summary += "\n\n" + proxy_assessment(args.proxy_packages)
     except (OSError, ValueError, TypeError):
-        raise SystemExit("SBOM missing or malformed; inventory gate failed closed") from None
+        raise SystemExit("Release inventory missing, malformed or unsafe; gate failed closed") from None
     print(summary)
+
+
+def proxy_assessment(path: Path) -> str:
+    """Verify package-level applicability of the unmaintained OpenPGP advisory."""
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
+        raise ValueError("Proxy dependency graph missing or oversized")
+    raw = path.read_bytes()
+    packages = set(raw.decode("ascii").splitlines())
+    if "github.com/caddyserver/caddy/v2/cmd/caddy" not in packages:
+        raise ValueError("Missing proxy main package")
+    if any(package == "golang.org/x/crypto/openpgp"
+           or package.startswith("golang.org/x/crypto/openpgp/") for package in packages):
+        raise ValueError("Unmaintained OpenPGP package is linked into the proxy")
+    return (f"GO-2026-5932 applicability: affected OpenPGP packages absent from {len(packages)} "
+            "proxy build dependencies. Module-level scanner finding remains visible.\n"
+            "Proxy dependency graph SHA256: " + hashlib.sha256(raw).hexdigest())
 
 
 if __name__ == "__main__":

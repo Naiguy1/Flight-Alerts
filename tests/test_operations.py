@@ -13,7 +13,7 @@ from unittest.mock import patch
 from tools.backup import create_backup, restore_backup, verify_backup
 from tools.ci_test_report import escape, escape_property
 from tools.ci_security_report import findings, image_observations
-from tools.ci_sbom_report import inventory
+from tools.ci_sbom_report import inventory, proxy_assessment
 from tools.ci_codeql_report import findings as codeql_findings
 from tools.publish_validation_report import build_report, trusted_event, trusted_pr_head
 from tools.healthcheck import worker_is_healthy
@@ -213,7 +213,36 @@ class SupplyChainTests(unittest.TestCase):
                     {"type": "library", "name": "example", "version": "1"},
                 ],
             }))
+            (folder / "proxy-packages.txt").write_text("github.com/caddyserver/caddy/v2/cmd/caddy\n")
             self.assertEqual(build_report("Image", folder, "success")["conclusion"], "success")
+
+    def test_proxy_openpgp_assessment_requires_actual_main_package_and_rejects_affected_packages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "packages.txt"
+            with self.assertRaises(ValueError):
+                proxy_assessment(path)
+            for contents in ("", "golang.org/x/crypto/ssh\n",
+                             "github.com/caddyserver/caddy/v2/cmd/caddy\ngolang.org/x/crypto/openpgp\n",
+                             "github.com/caddyserver/caddy/v2/cmd/caddy\ngolang.org/x/crypto/openpgp/packet\n"):
+                path.write_text(contents)
+                with self.subTest(contents=contents), self.assertRaises(ValueError):
+                    proxy_assessment(path)
+            path.write_text("github.com/caddyserver/caddy/v2/cmd/caddy\ngolang.org/x/crypto/ssh\n")
+            self.assertIn("affected OpenPGP packages absent", proxy_assessment(path))
+
+    def test_image_report_fails_without_proxy_applicability_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            clean = {"SchemaVersion": 2, "ArtifactName": "image", "Results": [{"Target": "image"}]}
+            for name in ("trivy-results.json", "trivy-proxy-results.json"):
+                (folder / name).write_text(json.dumps(clean))
+            (folder / "sbom.cdx.json").write_text(json.dumps({
+                "bomFormat": "CycloneDX", "specVersion": "1.7",
+                "components": [{"type": "library", "name": "example", "version": "1"}],
+            }))
+            report = build_report("Image", folder, "success")
+            self.assertEqual(report["conclusion"], "failure")
+            self.assertIn("applicability evidence missing", report["output"]["text"])
 
     def test_lower_severity_image_findings_remain_visible_without_hiding_gate_failures(self):
         report = {"SchemaVersion": 2, "ArtifactName": "image", "Results": [{"Vulnerabilities": [

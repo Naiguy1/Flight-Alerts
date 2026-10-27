@@ -63,3 +63,25 @@ SHA256 and all image vulnerability severity counts, including lower severities.
 Missing/malformed inventory fails the gate. The full `image-sbom` artifact remains
 available for review; only bounded package identifiers, never arbitrary SBOM
 properties, scanner paths or matched secret contents, are published in diagnostics.
+
+## Follow-up finding review (2026-10-27)
+
+Expanded diagnostics on candidate
+`b7c111e580e39e3298fbb34e3d092c72bbb8ac9b` exposed lower-severity findings omitted
+from the original bounded summary. They were reviewed rather than suppressed:
+
+| Finding | Resolution / applicability |
+|---|---|
+| `pip 25.0.1`: CVE-2025-8869, CVE-2026-13346, CVE-2026-3219, CVE-2026-6357, CVE-2026-8643, CVE-2026-1703 | Pin `pip 26.2.2` in all environments, reusing its already resolved/audited development wheel hash. Upgrade both the base-image system installer and application virtualenv; CI verifies both against the runtime lock. Runtime/optional package audits and final image scans must pass again. |
+| `github.com/go-chi/chi/v5 v5.3.2`: CVE-2026-114437 | Build with `v5.4.0`, the [upstream security fix](https://github.com/go-chi/chi/releases/tag/v5.4.0); compile and scan the final proxy again. |
+| `golang.org/x/crypto v0.57.0`: GO-2026-5932, scanner severity UNKNOWN | The [Go security team's reviewed advisory](https://github.com/golang/vulndb/blob/master/data/reports/GO-2026-5932.yaml) applies specifically to unmaintained `openpgp` packages, with no fixed module version. The module is also used for unrelated cryptography. Verify affected-package absence as described below; retain the module-level scanner observation. |
+
+The GO-2026-5932 applicability assessment is deliberately narrow: no OpenPGP
+package or descendant may occur in the exact static proxy build's `go list -deps`
+graph. The builder fails if one appears and copies that graph into the resulting
+image. CI extracts it from the image, requires the Caddy main package, checks the
+affected-package absence again, and records the graph checksum in the Image
+diagnostic. This supports a package-level not-affected assessment when those
+checks pass; it does not declare the whole `x/crypto` module vulnerability-free.
+An eligible independent reviewer must review this evidence before release.
+There is no Trivy ignore rule, severity downgrade or disabled scanner gate.

@@ -9,13 +9,18 @@ RUN python -m venv /opt/venv \
 
 FROM python:3.12-alpine@sha256:5789aa194f757888f41fa3d48e14b6feaa1b57c0af0b56fcb1372d6474d3bff0
 WORKDIR /app
+COPY requirements.txt /tmp/runtime-requirements.txt
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DATABASE_URL=sqlite:////app/data/flight_deals.db \
     CONFIG_PATH=/app/config.yaml \
     WORKER_HEARTBEAT_PATH=/app/data/worker-heartbeat.json
-RUN apk add --no-cache ca-certificates tzdata \
+RUN sed -n '/^pip==/p' /tmp/runtime-requirements.txt > /tmp/installer.txt \
+    && test -s /tmp/installer.txt \
+    && python -m pip install --no-cache-dir --only-binary=:all: --require-hashes --no-deps -r /tmp/installer.txt \
+    && rm /tmp/runtime-requirements.txt /tmp/installer.txt \
+    && apk add --no-cache ca-certificates tzdata \
     && addgroup -S -g 10001 flight \
     && adduser -S -D -H -u 10001 -G flight flight \
     && mkdir -p /app/data \

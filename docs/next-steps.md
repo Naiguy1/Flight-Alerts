@@ -20,6 +20,12 @@ quota waits, prune expired individual digest fares after revalidation, and make
 the image gate validate/publish the SBOM inventory and all vulnerability severity
 counts. No scanner gate is disabled or weakened.
 
+The expanded image report also exposed old system/virtualenv installers and a
+proxy router finding. The follow-up pins the patched versions in both installer
+locations and the proxy build. The remaining module-level OpenPGP advisory needs
+the [scoped package-applicability review](supply-chain.md#follow-up-finding-review-2026-10-27)
+and the CI proof that affected packages are absent.
+
 Release remains blocked on an eligible independent reviewer, applying/verifying
 the supplied branch protection, and the deployment operator's production-data
 restore rehearsal and host/service/staging evidence. Repository access alone

@@ -65,6 +65,17 @@ this table do not validate new commits. Local tests used available dependencies;
 locked installation was unavailable in the editing environment. CI is required
 to execute the complete locked suite without skips.
 
+Follow-up [PR #7](https://github.com/Naiguy1/Flight-Alerts/pull/7), implementation
+SHA `b7c111e580e39e3298fbb34e3d092c72bbb8ac9b`, passed
+[CI](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40601322955) with 260 tests
+and no skips, and [CodeQL](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40601322959).
+The [expanded image report](https://github.com/Naiguy1/Flight-Alerts/runs/122530735740)
+showed no high/critical findings, but exposed old installer/router versions and
+GO-2026-5932. This SHA is superseded by remediation on the same PR; do not release
+it based on its green severity gate. The [specific finding review](supply-chain.md#follow-up-finding-review-2026-10-27)
+records fixes for every available patch and the evidence required to assess the
+remaining OpenPGP-only advisory. Rerun all four gates on the remediation commit.
+
 An administrator must arrange an eligible reviewer and use
 `python -m tools.apply_branch_protection --repository Naiguy1/Flight-Alerts --apply`,
 then run the same command without `--apply` to verify. This requires a privately

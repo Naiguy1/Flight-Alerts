@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 
 from tools.ci_security_report import findings, image_observations, read_report
 from tools.ci_codeql_report import scan_directory
-from tools.ci_sbom_report import inventory
+from tools.ci_sbom_report import inventory, proxy_assessment
 
 REPOSITORY = "Naiguy1/Flight-Alerts"
 BRANCHES = {"refs/heads/main", "refs/heads/production-hardening"}
@@ -129,6 +129,11 @@ def build_report(kind: str, folder: Path, gate_result: str) -> dict:
             except (OSError, ValueError, TypeError):
                 success = False
                 sections.append("SBOM: required component inventory missing or malformed.")
+            try:
+                sections.append(proxy_assessment(folder / "proxy-packages.txt"))
+            except (OSError, ValueError, TypeError):
+                success = False
+                sections.append("Proxy package applicability evidence missing or unsafe.")
             text = "\n\n".join(sections)
         elif kind == "CodeQL":
             result = scan_directory(folder / "codeql-results")
