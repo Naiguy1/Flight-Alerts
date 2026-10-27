@@ -7,6 +7,7 @@ import ssl
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -457,6 +458,132 @@ class QuietHoursTests(unittest.TestCase):
         delay = quiet_seconds(at_night, {"start": 22, "end": 3, "timezone": "America/Denver"})
         self.assertLess(delay, 3600)
         self.assertGreater(delay, 1700)
+
+
+class SQLiteDeliveryIntegrationTests(unittest.TestCase):
+    """Exercise real leases, persistence and subscriptions with SMTP mocked."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.now = datetime(2026, 10, 27, 15, 0, tzinfo=UTC)
+        self.time_patch = patch("db.crud._now", side_effect=lambda: self.now.replace(tzinfo=None))
+        self.time_patch.start()
+        self.db = DatabaseManager("sqlite:///" + str(Path(self.directory.name) / "alerts.db"))
+        self.config = {"filters": {"freshness_hours": 24, "digest_interval_hours": 1}}
+        self.db.get_config(self.config)
+        self.recipient = self.db.invite_recipient("one@example.invalid")
+        self.db.confirm_recipient(self.recipient["id"])
+        self.notifier = Mock()
+        self.service = DeliveryService(
+            self.db, self.notifier, TokenSigner(SECRET), "https://alerts.example.com",
+            lambda: self.config, clock=lambda: self.now,
+        )
+
+    def tearDown(self):
+        self.db.close()
+        self.time_patch.stop()
+        self.directory.cleanup()
+
+    def payload(self, observed=None):
+        payload = deal_payload(observed or self.now)
+        payload["offer"].update(
+            outbound_date=(self.now + timedelta(days=35)).date().isoformat(),
+            return_date=(self.now + timedelta(days=42)).date().isoformat(),
+        )
+        return payload
+
+    def enqueue(self, key, recipient=None, payload=None):
+        self.assertTrue(self.db.enqueue_notification(
+            recipient or self.recipient["id"], "deal", payload or self.payload(), key,
+        ))
+
+    def rows(self):
+        with self.db._read() as connection:
+            return [dict(row) for row in connection.execute("SELECT * FROM deliveries ORDER BY id")]
+
+    def test_partial_failure_retries_only_the_failed_recipient_across_restarts(self):
+        second = self.db.invite_recipient("two@example.invalid")
+        self.db.confirm_recipient(second["id"])
+        self.enqueue("first")
+        self.enqueue("second", second["id"])
+        def send(recipient, *args):
+            if recipient.startswith("one"):
+                raise DeliveryError("smtp_network_failed")
+        self.notifier.send_message.side_effect = send
+        self.assertEqual(self.service.process_pending(limit=2), 1)
+        self.assertEqual([row["status"] for row in self.rows()], ["retry", "sent"])
+        # A newly constructed service/DB handle must preserve the retry state.
+        self.now += timedelta(seconds=61)
+        self.notifier.send_message.side_effect = None
+        restarted = DatabaseManager("sqlite:///" + str(Path(self.directory.name) / "alerts.db"))
+        try:
+            delivery = DeliveryService(restarted, self.notifier, TokenSigner(SECRET), "https://alerts.example.com",
+                                       lambda: self.config, clock=lambda: self.now)
+            self.assertEqual(delivery.process_pending(limit=2), 1)
+        finally:
+            restarted.close()
+        self.assertEqual([row["status"] for row in self.rows()], ["sent", "sent"])
+        self.assertEqual([row["attempts"] for row in self.rows()], [2, 1])
+        self.assertEqual(self.notifier.send_message.call_count, 3)
+
+    def test_expired_claim_after_slow_revalidation_never_sends_and_is_recoverable(self):
+        self.enqueue("first")
+        def slow_check(payload):
+            self.now += timedelta(seconds=301)
+            return True
+        self.service.revalidate = slow_check
+        with self.assertLogs("notifier.delivery", level="WARNING") as logs:
+            self.assertEqual(self.service.process_pending(limit=1), 0)
+        self.assertIn("notification_lease_lost", " ".join(logs.output))
+        self.notifier.send_message.assert_not_called()
+        self.service.revalidate = None
+        self.assertEqual(self.service.process_pending(limit=1), 1)
+        self.assertEqual(self.rows()[0]["attempts"], 2)
+        self.assertEqual(self.rows()[0]["status"], "sent")
+
+    def test_unsubscribe_during_budget_wait_cancels_claim_before_smtp(self):
+        self.enqueue("first")
+        def budget():
+            self.db.disable_recipient(self.recipient["id"])
+            return True
+        self.service.send_budget = budget
+        self.assertEqual(self.service.process_pending(limit=1), 0)
+        self.assertEqual(self.rows()[0]["status"], "canceled")
+        self.notifier.send_message.assert_not_called()
+
+    def test_digest_renews_entire_group_between_slow_revalidations(self):
+        self.config["filters"]["digest_enabled"] = True
+        queued_at = self.now - timedelta(hours=2)
+        with patch("db.crud._now", return_value=queued_at.replace(tzinfo=None)):
+            self.enqueue("first", payload=self.payload(queued_at))
+            self.enqueue("second", payload=self.payload(queued_at))
+        def slow_check(payload):
+            self.now += timedelta(seconds=200)
+            return True
+        self.service.revalidate = slow_check
+        self.assertEqual(self.service.process_pending(limit=1), 2)
+        self.assertEqual([row["status"] for row in self.rows()], ["sent", "sent"])
+        self.assertEqual(self.notifier.send_message.call_count, 1)
+        self.assertIsNotNone(self.db.get_recipient(self.recipient["id"])["last_digest_at"])
+
+    def test_retries_are_bounded_and_do_not_resurrect_failed_delivery(self):
+        self.enqueue("first")
+        self.notifier.send_message.side_effect = DeliveryError("smtp_network_failed")
+        for _ in range(5):
+            self.assertEqual(self.service.process_pending(limit=1), 0)
+            self.now += timedelta(hours=1)
+        self.assertEqual(self.rows()[0]["status"], "failed")
+        self.assertEqual(self.rows()[0]["attempts"], 5)
+        self.service.process_pending(limit=1)
+        self.assertEqual(self.notifier.send_message.call_count, 5)
+
+    def test_quiet_hours_defer_without_consuming_delivery_attempts(self):
+        self.enqueue("first")
+        self.config["filters"]["quiet_hours"] = {"start": 14, "end": 16, "timezone": "UTC"}
+        self.assertEqual(self.service.process_pending(limit=1), 0)
+        self.assertEqual(self.rows()[0]["status"], "pending")
+        self.assertEqual(self.rows()[0]["attempts"], 0)
+        self.notifier.send_message.assert_not_called()
 
 
 if __name__ == "__main__":

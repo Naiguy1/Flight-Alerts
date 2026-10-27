@@ -292,6 +292,23 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(caught.exception.category, "invalid_query")
         fetcher.transport.get_json.assert_not_called()
 
+    def test_response_cannot_substitute_another_route_or_currency(self):
+        for parameters in ({"departure_id": "LAS"}, {"arrival_id": "CDG"},
+                           {"currency": "EUR"}, {"outbound_date": "2027-01-02"}):
+            payload = {"search_parameters": parameters, "best_flights": [{"price": 100}]}
+            with self.subTest(parameters=parameters), self.assertRaises(ProviderError) as caught:
+                self.fetcher(payload).fetch_offers(**QUERY)
+            self.assertEqual(caught.exception.category, "mismatched_query")
+        for kind, payload in (
+            (GoogleFlightsFetcher, {"best_flights": [{"price": 100, "flights": [{"departure_airport": {"id": "LAS"}}]}]}),
+            (GoogleFlightsFetcher, {"best_flights": [{"price": 100, "flights": [{"arrival_airport": {"id": "CDG"}}]}]}),
+            (KiwiTequilaFetcher, {"data": [{"price": 100, "flyFrom": "LAS"}]}),
+            (KiwiTequilaFetcher, {"data": [{"price": 100, "flyTo": "CDG"}]}),
+        ):
+            with self.subTest(kind=kind.__name__, payload=payload), self.assertRaises(ProviderError) as caught:
+                self.fetcher(payload, kind).fetch_offers(**QUERY)
+            self.assertEqual(caught.exception.category, "invalid_offers")
+
     def test_scraper_optional_and_safe_numeric_parser(self):
         scraper = FastFlightsScraper(worker_runner=lambda query, timeout: [
             {"price": "$1,234.50", "airlines": ["Air"], "layovers": 1}, {"price": "€1.234,50"}])

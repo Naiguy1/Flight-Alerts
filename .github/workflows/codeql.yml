@@ -16,6 +16,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      checks: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -27,3 +28,12 @@ jobs:
       - uses: github/codeql-action/analyze@4bfa242aa49c5f7c6770b98670d354a7dfac05f8 # v3
         with:
           category: /language:python
+          output: codeql-results
+      - name: Enforce high and critical CodeQL release gate
+        run: python3 -m tools.ci_codeql_report codeql-results
+      - name: Publish connector-readable validation diagnostics
+        if: always() && github.event_name != 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GATE_RESULT: ${{ job.status }}
+        run: python3 -m tools.publish_validation_report CodeQL

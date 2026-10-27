@@ -16,6 +16,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import xml.etree.ElementTree as ET
 
 from tools.ci_security_report import findings, read_report
+from tools.ci_codeql_report import scan_directory
 
 REPOSITORY = "Naiguy1/Flight-Alerts"
 BRANCHES = {"refs/heads/main", "refs/heads/production-hardening"}
@@ -91,9 +92,13 @@ def build_report(kind: str, folder: Path, gate_result: str) -> dict:
                 success = success and not result
                 sections.append(label + ": " + ("no release-blocking image findings" if not result else "\n" + "\n".join(result[:30])))
             text = "\n\n".join(sections)
+        elif kind == "CodeQL":
+            result = scan_directory(folder / "codeql-results")
+            success = success and not result
+            text = "No unsuppressed high/critical CodeQL findings." if not result else "\n".join(result[:30])
         else:
             raise ValueError("Unknown validation kind")
-    except (OSError, ValueError, TypeError, ET.ParseError):
+    except (OSError, ValueError, TypeError, AttributeError, ET.ParseError):
         success = False
         text = "Required diagnostic report is missing or malformed. Inspect the failed workflow step; no success is inferred."
     # Only synthetic test diagnostics and selected scanner identifiers reach this
@@ -112,7 +117,7 @@ def build_report(kind: str, folder: Path, gate_result: str) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("kind", choices=["Tests", "Security", "Image"])
+    parser.add_argument("kind", choices=["Tests", "Security", "Image", "CodeQL"])
     args = parser.parse_args()
     if not trusted_event(os.environ):
         print("Diagnostic publication skipped for an untrusted event or branch")

@@ -13,6 +13,7 @@ from unittest.mock import patch
 from tools.backup import create_backup, restore_backup, verify_backup
 from tools.ci_test_report import escape, escape_property
 from tools.ci_security_report import findings
+from tools.ci_codeql_report import findings as codeql_findings
 from tools.publish_validation_report import build_report, trusted_event
 from tools.healthcheck import worker_is_healthy
 from tools.verify_lock import read_lock
@@ -152,7 +153,8 @@ class SupplyChainTests(unittest.TestCase):
 
     def test_security_reports_fail_closed_on_missing_inventory(self):
         for scanner, payload in (("pip-audit", {}), ("pip-audit", {"dependencies": []}),
-                                 ("trivy", {}), ("trivy", {"Results": []})):
+                                 ("trivy", {}), ("trivy", {"Results": []}),
+                                 ("trivy", {"SchemaVersion": 2, "ArtifactName": "image", "Results": []})):
             with self.subTest(scanner=scanner), self.assertRaises(ValueError):
                 findings(scanner, payload)
 
@@ -195,6 +197,19 @@ class SupplyChainTests(unittest.TestCase):
             self.assertEqual(report["conclusion"], "failure")
             self.assertIn("CVE-SYNTHETIC", report["output"]["text"])
             self.assertIn("missing", report["output"]["text"])
+
+    def test_codeql_gate_requires_valid_sarif_and_blocks_high_security(self):
+        with self.assertRaises(ValueError):
+            codeql_findings({})
+        report = {"version": "2.1.0", "runs": [{"tool": {"driver": {"rules": [{
+            "id": "py/example", "properties": {"security-severity": "8.1", "tags": ["security"]},
+        }]}}, "results": [{"ruleId": "py/example", "message": {"text": "SYNTHETIC_SECRET"}}]}]}
+        result = codeql_findings(report)
+        self.assertEqual(len(result), 1)
+        self.assertIn("py/example", result[0])
+        self.assertNotIn("SYNTHETIC_SECRET", result[0])
+        report["runs"][0]["tool"]["driver"]["rules"][0]["properties"]["security-severity"] = "5.0"
+        self.assertEqual(codeql_findings(report), [])
 
 
 if __name__ == "__main__":

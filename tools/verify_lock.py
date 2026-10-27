@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
-PIN = re.compile(r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.!+-]+) --hash=sha256:([0-9a-f]{64})")
+PIN = re.compile(r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.!+-]+)((?: --hash=sha256:[0-9a-f]{64})+)")
 
 
 def read_lock(path: Path) -> dict[str, str]:

@@ -60,6 +60,17 @@ class GoogleFlightsFetcher(FlightFetcher):
             raise ProviderError("invalid_payload")
         if data.get("error"):
             raise ProviderError("provider_rejected")
+        parameters = data.get("search_parameters")
+        if parameters is not None:
+            if not isinstance(parameters, dict):
+                raise ProviderError("invalid_payload")
+            for name, expected in {
+                "departure_id": origin, "arrival_id": destination,
+                "outbound_date": outbound_date, "return_date": return_date,
+                "currency": "USD", "type": "1",
+            }.items():
+                if name in parameters and str(parameters[name]) != expected:
+                    raise ProviderError("mismatched_query")
         metadata = data.get("search_metadata") or {}
         if not isinstance(metadata, dict):
             raise ProviderError("invalid_payload")
@@ -88,8 +99,16 @@ class GoogleFlightsFetcher(FlightFetcher):
                 if not isinstance(row, dict):
                     raise ValueError("Invalid offer")
                 legs = row.get("flights", [])
-                if not isinstance(legs, list) or any(not isinstance(leg, dict) for leg in legs):
+                if not isinstance(legs, list) or len(legs) > 20 or any(not isinstance(leg, dict) for leg in legs):
                     raise ValueError("Invalid legs")
+                for leg, name, expected in (
+                    (legs[0] if legs else {}, "departure_airport", origin),
+                    (legs[-1] if legs else {}, "arrival_airport", destination),
+                ):
+                    airport = leg.get(name)
+                    if airport is not None:
+                        if not isinstance(airport, dict) or ("id" in airport and airport["id"] != expected):
+                            raise ValueError("Mismatched itinerary")
                 airlines = sorted({leg["airline"] for leg in legs
                                    if isinstance(leg.get("airline"), str) and leg["airline"]})
                 layovers = row.get("layovers")

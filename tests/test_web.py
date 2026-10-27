@@ -1,15 +1,20 @@
 """Security boundary regressions; no external SMTP, flight calls or real credentials."""
 
 import importlib.util
+import asyncio
+import base64
 import json
 import re
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from web.security import CSRFSigner, LoginLimiter, hash_password, valid_password_hash, verify_password
+from web.security import CSRFSigner, LoginLimiter, canonical_https_origin, hash_password, valid_password_hash, verify_password
 
 WEB_AVAILABLE = all(importlib.util.find_spec(name) is not None for name in ("fastapi", "jinja2", "httpx", "yaml"))
 
@@ -36,10 +41,68 @@ class PasswordTests(unittest.TestCase):
     def test_failed_login_work_is_bounded(self):
         limiter = LoginLimiter()
         for _ in range(6):
-            self.assertTrue(limiter.allowed("test"))
-            limiter.failed("test")
-        self.assertFalse(limiter.allowed("test"))
-        self.assertTrue(limiter.allowed("other"))
+            reservation = limiter.reserve("test")
+            self.assertIsNotNone(reservation)
+            limiter.finish(reservation, success=False)
+        self.assertIsNone(limiter.reserve("test"))
+        self.assertIsNotNone(limiter.reserve("other"))
+
+    def test_attempt_reservations_bound_concurrent_hashes_before_dispatch(self):
+        limiter = LoginLimiter(max_concurrent=2)
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            reservations = list(pool.map(limiter.reserve, [f"client-{i}" for i in range(20)]))
+        accepted = [token for token in reservations if token is not None]
+        self.assertEqual(len(accepted), 2)
+        for token in accepted:
+            limiter.finish(token, success=True)
+        self.assertIsNotNone(limiter.reserve("after-completion"))
+
+    def test_success_refunds_rate_count_and_failure_window_expires(self):
+        now = [1000.0]
+        limiter = LoginLimiter(clock=lambda: now[0])
+        for _ in range(20):
+            token = limiter.reserve("admin")
+            self.assertIsNotNone(token)
+            limiter.finish(token, success=True)
+        for _ in range(6):
+            token = limiter.reserve("bad")
+            self.assertIsNotNone(token)
+            limiter.finish(token, success=False)
+        self.assertIsNone(limiter.reserve("bad"))
+        now[0] = 1060.0
+        self.assertIsNotNone(limiter.reserve("bad"))
+
+    def test_global_failure_budget_and_invalid_limit(self):
+        limiter = LoginLimiter()
+        for index in range(60):
+            token = limiter.reserve(f"client-{index}")
+            self.assertIsNotNone(token)
+            limiter.finish(token, success=False)
+        self.assertIsNone(limiter.reserve("new-client"))
+        for invalid in (0, 5, True):
+            with self.assertRaises(ValueError):
+                LoginLimiter(max_concurrent=invalid)
+
+
+class OriginTests(unittest.TestCase):
+    def test_browser_origin_canonicalization(self):
+        for raw, expected in {
+            "https://EXAMPLE.COM:443/": "https://example.com",
+            "https://example.com:8443": "https://example.com:8443",
+            "https://bücher.example": "https://xn--bcher-kva.example",
+            "https://[2001:db8::1]:443": "https://[2001:db8::1]",
+            "https://localhost": "https://localhost",
+        }.items():
+            self.assertEqual(canonical_https_origin(raw), expected)
+
+    def test_unsafe_or_ambiguous_origins_rejected(self):
+        for raw in ("http://example.com", "https://user@example.com", "https://example.com/path",
+                    "https://example.com?token=secret", "https://example.com#fragment", "https://example.com/\n",
+                    "https://example.com\\@evil.example", "https://example.com.", "https://bad_host.example",
+                    "https://example.com:0", "https://example.com:65536", "https://[fe80::1%eth0]",
+                    "https://127.0.0.01", "https://-example.com"):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                canonical_https_origin(raw)
 
 
 class CSRFTests(unittest.TestCase):
@@ -82,6 +145,7 @@ class WebTests(unittest.TestCase):
                                        admin_username="admin", admin_password_hash=self.password_hash,
                                        token_secret="test-only-token-secret-longer-than-32-characters")
         self.db = DatabaseManager(self.runtime.database_url)
+        self.addCleanup(self.db.close)
         self.app = create_app(self.runtime, self.db)
         self.client = self.enterContext(TestClient(self.app, base_url="https://testserver", raise_server_exceptions=False))
         self.auth = ("admin", self.password)
@@ -100,7 +164,9 @@ class WebTests(unittest.TestCase):
     def test_anonymous_administrative_routes_are_closed(self):
         self.assertEqual(self.client.get("/").status_code, 401)
         for path in ("/scan", "/emails/add", "/emails/test", "/airports/add", "/blocklist/add", "/watches/add", "/settings"):
-            self.assertEqual(self.client.post(path, data={}).status_code, 401, path)
+            self.assertIn(self.client.post(path, data={}).status_code, (401, 429), path)
+        self.assertEqual(self.db.list_recipients(), [])
+        self.assertEqual(self.db.dashboard_snapshot([])["jobs"], [])
         self.assertEqual(self.client.get("/docs").status_code, 404)
         self.assertEqual(self.client.get("/openapi.json").status_code, 404)
 
@@ -203,6 +269,72 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.client.get("/", headers={"Host": "evil.example"}, auth=self.auth).status_code, 400)
         self.assertEqual(self.client.get("http://testserver/", auth=self.auth).status_code, 400)
 
+    def test_duplicate_authorization_headers_are_rejected(self):
+        authorization = "Basic " + base64.b64encode(f"admin:{self.password}".encode()).decode()
+        response = self.client.get("/", headers=[("Authorization", authorization), ("Authorization", authorization)])
+        self.assertEqual(response.status_code, 401)
+
+    def test_authentication_concurrency_is_bounded_at_http_boundary(self):
+        entered = threading.Event()
+        release = threading.Event()
+        lock = threading.Lock()
+        calls = [0]
+
+        def slow_verify(password, encoded):
+            with lock:
+                calls[0] += 1
+                if calls[0] == 2:
+                    entered.set()
+            release.wait(timeout=5)
+            return False
+
+        with patch("dashboard.verify_password", side_effect=slow_verify):
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                first = pool.submit(self.client.get, "/", auth=self.auth)
+                second = pool.submit(self.client.get, "/", auth=self.auth)
+                try:
+                    self.assertTrue(entered.wait(timeout=3), "Two bounded verifier calls should start")
+                    denied = self.client.get("/", auth=self.auth)
+                    self.assertEqual(denied.status_code, 429)
+                    self.assertEqual(calls[0], 2)
+                finally:
+                    release.set()
+                self.assertEqual(first.result(timeout=5).status_code, 401)
+                self.assertEqual(second.result(timeout=5).status_code, 401)
+
+    def test_delivery_and_improvement_settings_are_validated_and_persisted(self):
+        payload = dict(config_version=self.db.get_config_version(), threshold=55,
+                       freshness_hours=24, digest_enabled="on", digest_interval_hours=6,
+                       price_improvement_usd=50, price_improvement_percent=15,
+                       deduplication_window_hours=72, scan_interval_hours=8,
+                       quiet_enabled="on", quiet_start=22, quiet_end=7, quiet_timezone="America/Denver")
+        self.assertEqual(self.post("/settings", payload).status_code, 303)
+        cfg = self.db.get_config({})
+        self.assertEqual(cfg["filters"]["price_improvement_usd"], 50)
+        self.assertEqual(cfg["filters"]["price_improvement_percent"], 15)
+        self.assertEqual(cfg["scanner"]["scan_interval_hours"], 8)
+        payload.update(config_version=self.db.get_config_version(), digest_interval_hours=24)
+        self.assertEqual(self.post("/settings", payload).status_code, 422)
+        payload.update(digest_interval_hours=6, alerts_paused="arbitrary")
+        self.assertEqual(self.post("/settings", payload).status_code, 422)
+
+    def test_database_provider_error_and_job_history_are_visible(self):
+        self.db.record_provider_result("serpapi", False, error="authentication_failed")
+        job_id = self.db.enqueue_scan(cooldown_seconds=0)
+        job = self.db.claim_scan()
+        self.assertEqual(job["id"], job_id)
+        self.db.finish_scan(job_id, job["lease_token"], False, error="incomplete_coverage")
+        response = self.client.get("/", auth=self.auth)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("authentication_failed", response.text)
+        self.assertIn("incomplete_coverage", response.text)
+
+    def test_invitation_quota_is_shared_through_database(self):
+        for _ in range(5):
+            self.assertTrue(self.db.provider_budget("admin_invite", 5, 100))
+        self.assertEqual(self.post("/emails/add", {"email": "recipient@example.com"}).status_code, 429)
+        self.assertEqual(self.db.list_recipients(), [])
+
     def test_internal_failures_have_only_safe_category_and_correlation(self):
         with patch.object(self.db, "list_recipients", side_effect=RuntimeError("smtp-password-or-stack-secret")):
             response = self.client.get("/", auth=self.auth)
@@ -217,6 +349,73 @@ class WebTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             with TestClient(create_app(replace(self.runtime, admin_password_hash=""), self.db)):
                 pass
+
+    def test_explicit_default_https_port_is_canonicalized(self):
+        from dashboard import create_app
+        from fastapi.testclient import TestClient
+        app = create_app(replace(self.runtime, public_base_url="https://TESTSERVER:443/"), self.db)
+        with TestClient(app, base_url="https://testserver", raise_server_exceptions=False) as client:
+            response = client.get("/", auth=self.auth)
+            self.assertEqual(response.status_code, 200)
+            token = re.search(r'name="csrf_token" value="([^"]+)"', response.text).group(1)
+            self.assertEqual(client.post("/scan", auth=self.auth, data={"csrf_token": token},
+                                         headers={"Origin": "https://testserver"}).status_code, 303)
+
+
+@unittest.skipUnless(WEB_AVAILABLE, "Install locked web/test dependencies for middleware tests")
+class MiddlewareTests(unittest.IsolatedAsyncioTestCase):
+    async def invoke(self, *, headers=None, receive=None, application=None):
+        from dashboard import SecurityMiddleware
+        messages = []
+        calls = []
+
+        async def app(scope, incoming, send):
+            calls.append(True)
+            if application:
+                return await application(scope, incoming, send)
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        async def default_receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            messages.append(message)
+
+        scope = {"type": "http", "path": "/scan", "scheme": "https", "method": "POST",
+                 "query_string": b"", "headers": headers or [(b"host", b"testserver")]}
+        owner = SimpleNamespace(state=SimpleNamespace(trusted_hosts={"testserver"}))
+        await SecurityMiddleware(app, owner)(scope, receive or default_receive, send)
+        return messages, calls
+
+    async def test_slow_request_body_is_timed_out_without_reaching_application(self):
+        async def stalled_receive():
+            await asyncio.sleep(1)
+            return {"type": "http.request", "body": b"", "more_body": True}
+        with patch("dashboard.BODY_READ_SECONDS", 0.02):
+            messages, calls = await self.invoke(receive=stalled_receive)
+        self.assertEqual(messages[0]["status"], 408)
+        self.assertEqual(calls, [])
+        self.assertIn((b"cache-control", b"no-store"), messages[0]["headers"])
+
+    async def test_fragmented_zero_byte_stream_is_bounded(self):
+        async def empty_receive():
+            return {"type": "http.request", "body": b"", "more_body": True}
+        messages, calls = await self.invoke(receive=empty_receive)
+        self.assertEqual(messages[0]["status"], 413)
+        self.assertEqual(calls, [])
+
+    async def test_conflicting_duplicate_or_mismatched_lengths_are_rejected(self):
+        cases = [
+            [(b"content-length", b"0"), (b"transfer-encoding", b"chunked")],
+            [(b"content-length", b"0"), (b"content-length", b"0")],
+            [(b"content-length", b"+0")],
+            [(b"content-length", b"1")],
+        ]
+        for headers in cases:
+            messages, calls = await self.invoke(headers=[(b"host", b"testserver"), *headers])
+            self.assertEqual(messages[0]["status"], 400)
+            self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":

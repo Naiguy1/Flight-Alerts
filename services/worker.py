@@ -150,6 +150,15 @@ class Worker:
             self.close()
 
     def run_once(self, *, dry_run=False):
+        if dry_run:
+            cfg = validate_config(self.db.get_config(self.default_config))
+            lease = self.db.acquire_lease("dry-run-scan", cfg["scanner"]["scan_deadline_seconds"] + 300)
+            if lease is None:
+                return None
+            try:
+                return self.scanner.run(job=None, dry_run=True)
+            finally:
+                self.db.release_lease("dry-run-scan", lease)
         self.db.enqueue_scan(cooldown_seconds=300)
         cfg = validate_config(self.db.get_config(self.default_config))
         job = self.db.claim_scan(lease_seconds=cfg["scanner"]["scan_deadline_seconds"] + 300)

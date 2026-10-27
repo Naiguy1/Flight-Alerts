@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -35,7 +36,7 @@ def evaluator_for(db, config: dict) -> DealEvaluator:
 
 
 def build_fetchers(runtime, config: dict, db, *, budgets=None, stop_event=None, deadline=None, heartbeat=None,
-                   provider_names: set[str] | None = None):
+                   provider_names: set[str] | None = None, transport_deadline_seconds: float | None = None):
     """One set per pool thread; sessions are never shared across query threads."""
     scanner = config["scanner"]
     budgets = budgets or ProviderBudgets(db)
@@ -47,6 +48,9 @@ def build_fetchers(runtime, config: dict, db, *, budgets=None, stop_event=None, 
                                         180 * scanner["concurrency"] / scanner["provider_requests_per_minute"]
                                         + scanner["request_timeout_seconds"] * 3)),
     }
+
+    if transport_deadline_seconds is not None:
+        options["deadline_seconds"] = min(options["deadline_seconds"], transport_deadline_seconds)
 
     def budget(name):
         return lambda: budgets.consume(name, scanner["provider_requests_per_minute"], scanner["provider_daily_budget"],
@@ -119,7 +123,6 @@ class ScanService:
     def run(self, *, job: dict | None = None, dry_run: bool = False) -> ScanResult:
         config = validate_config(self.db.get_config(self.default_config))
         scanner, filters = config["scanner"], config["filters"]
-        evaluator = evaluator_for(self.db, config)
         result = ScanResult()
         today = datetime.now(timezone.utc).date()
         deadline = self.clock() + scanner["scan_deadline_seconds"]
@@ -133,7 +136,7 @@ class ScanService:
         queries = []
         for origin in scanner["origins"]:
             for destination in config["monitored_destinations"]:
-                if destination["code"].lower() in blocked or destination["city"].lower() in blocked:
+                if destination["code"] == origin or destination["code"].lower() in blocked or destination["city"].lower() in blocked:
                     continue
                 for offset in scanner["search_window"]["sample_departure_offsets_days"]:
                     outbound = today + timedelta(days=offset)
@@ -146,7 +149,10 @@ class ScanService:
             return result
         # Rotate coverage between persisted scan jobs when a daily cap prevents
         # a whole scan. A route at the end cannot be permanently starved.
-        rotation = ((job or {}).get("id", 1) - 1) * 97 % len(queries)
+        stride = 97
+        while math.gcd(stride, len(queries)) != 1:
+            stride += 1
+        rotation = ((job or {}).get("id", 1) - 1) * stride % len(queries)
         queries = queries[rotation:] + queries[:rotation]
 
         def should_stop():
@@ -235,26 +241,29 @@ class ScanService:
                         result.quota_exhausted = result.quota_exhausted or bool(quota_providers)
                     if all_blocked:
                         stopped.set()
-                    if not should_stop():
-                        deals = evaluator.evaluate_offers(offers)
-                        cheapest = min((offer for offer in offers if evaluator.is_eligible_route(offer)), key=lambda offer: offer.price_usd, default=None)
+                    if not self.stop_event.is_set() and self.clock() < deadline:
                         if not dry_run:
-                            if cheapest is not None:
-                                self.db.record_offers([cheapest])
-                                result.observations += 1
+                            # Re-evaluate with the latest validated policy BEFORE
+                            # inserting observations, avoiding self-inclusion.
                             live = validate_config(self.db.get_config(self.default_config))
                             live_evaluator = evaluator_for(self.db, live)
                             active = {item["code"] for item in live["monitored_destinations"]}
+                            deals = live_evaluator.evaluate_offers(offers)
+                            cheapest = min((offer for offer in offers if live_evaluator.is_eligible_route(offer)
+                                            and offer.destination in active), key=lambda offer: offer.price_usd, default=None)
+                            if cheapest is not None:
+                                self.db.record_offers([cheapest])
+                                result.observations += 1
                             if not live["filters"]["alerts_paused"]:
                                 for deal in deals:
-                                    if deal.offer.destination not in active or not live_evaluator.is_eligible_route(deal.offer):
-                                        continue
-                                    if deal.discount_percent < live["filters"]["discount_threshold_percent"]:
+                                    if deal.offer.destination not in active:
                                         continue
                                     event = self.db.reserve_alert(deal.offer, deal.average_price_usd, deal.discount_percent,
                                         baseline_source=deal.baseline_source, window_hours=live["filters"]["deduplication_window_hours"],
                                         improvement_usd=live["filters"]["price_improvement_usd"],
-                                        improvement_percent=live["filters"]["price_improvement_percent"])
+                                        improvement_percent=live["filters"]["price_improvement_percent"],
+                                        scan_job_id=job["id"] if job else None,
+                                        scan_lease_token=job["lease_token"] if job else None)
                                     result.alerts_reserved += int(event is not None)
                     delay = scanner["request_delay_seconds"]
                     until = min(deadline, self.clock() + delay)

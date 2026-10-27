@@ -61,8 +61,11 @@ class KiwiTequilaFetcher(FlightFetcher):
             try:
                 if not isinstance(row, dict):
                     raise ValueError("Invalid offer")
+                for field, expected in (("flyFrom", origin), ("flyTo", destination)):
+                    if field in row and row[field] != expected:
+                        raise ValueError("Mismatched itinerary")
                 segments = row.get("route", [])
-                if not isinstance(segments, list) or any(not isinstance(segment, dict) for segment in segments):
+                if not isinstance(segments, list) or len(segments) > 22 or any(not isinstance(segment, dict) for segment in segments):
                     raise ValueError("Invalid segments")
                 country = row.get("countryTo") or {}
                 if not isinstance(country, dict):

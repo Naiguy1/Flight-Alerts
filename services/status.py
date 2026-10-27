@@ -54,9 +54,12 @@ class StatusService:
                 try:
                     status = provider.fetch_status(watch["flight_iata"], watch["flight_date"])
                     self.db.record_provider_result("aviationstack", True, latency_ms=round((time.monotonic() - started) * 1000), offers=int(bool(status)))
+                    if (self.stop_event.is_set() or time.monotonic() >= deadline
+                            or not self.db.renew_lease("flight-status-poll", lease, 300)):
+                        break
                     if status:
                         # State and recipient outbox events are committed together.
-                        changed += int(self.db.update_flight_status(watch["id"], status))
+                        changed += int(self.db.update_flight_status(watch["id"], status, lease_name="flight-status-poll", lease_token=lease))
                 except Exception as exc:
                     category = getattr(exc, "category", type(exc).__name__)
                     self.db.record_provider_result("aviationstack", False, error=category)

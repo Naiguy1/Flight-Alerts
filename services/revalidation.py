@@ -5,10 +5,15 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
+import time
 
 from fetcher.base import FlightOffer
 from services.scanner import build_fetchers, evaluator_for
 from settings import validate_config
+
+
+logger = logging.getLogger(__name__)
 
 
 class RevalidationError(Exception):
@@ -57,29 +62,42 @@ class FareRevalidator:
                     cached = self.db.get_provider_cache(cache_key, ttl_seconds=300)
                     if cached is None:
                         self.heartbeat()
+                        request_deadline = time.monotonic() + 120
                         if self.fetcher_factory:
                             providers = self.fetcher_factory(config, {provider_name})
                         else:
                             # Only one query/provider; do not use a full scan's pacing deadline.
                             config["scanner"]["concurrency"] = 1
                             providers = build_fetchers(self.runtime, config, self.db, budgets=self.budgets,
-                                stop_event=self.stop_event, heartbeat=self.heartbeat, provider_names={provider_name})
+                                stop_event=self.stop_event, heartbeat=self.heartbeat, provider_names={provider_name},
+                                deadline=request_deadline, transport_deadline_seconds=120)
                         if len(providers) != 1:
                             raise RevalidationError("fare_provider_not_configured")
                         found = providers[0].fetch_offers(**query)
                         cached = [asdict(offer) for offer in found if all(getattr(offer, key) == query[key]
                                   for key in ("origin", "destination", "outbound_date", "return_date"))]
-                        self.db.set_provider_cache(cache_key, cached)
+                        if ((self.stop_event is not None and self.stop_event.is_set())
+                                or time.monotonic() >= request_deadline
+                                or not self.db.renew_lease(lease_name, lease, 180)):
+                            raise RevalidationError("fare_revalidation_lease_lost")
+                        if not self.db.set_provider_cache(cache_key, cached, lease_name=lease_name, lease_token=lease):
+                            raise RevalidationError("fare_revalidation_lease_lost")
                         self.heartbeat()
                 except Exception as exc:
                     if isinstance(exc, RevalidationError):
                         raise
                     raise RevalidationError() from None
                 finally:
-                    for provider in providers:
-                        provider.close()
-                    self.db.release_lease(lease_name, lease)
+                    try:
+                        for provider in providers:
+                            try:
+                                provider.close()
+                            except Exception:
+                                logger.warning("revalidation_provider_close_failed")
+                    finally:
+                        self.db.release_lease(lease_name, lease)
             candidates = [FlightOffer(**offer) for offer in cached]
+        now = self.clock()
         valid = []
         for candidate in candidates:
             checked = datetime.fromisoformat(candidate.observed_at.replace("Z", "+00:00"))

@@ -38,7 +38,7 @@ def findings(scanner: str, payload: dict) -> list[str]:
         inventory = payload.get("Results")
         if (not isinstance(payload.get("SchemaVersion"), int)
                 or not isinstance(payload.get("ArtifactName"), str)
-                or not isinstance(inventory, list)):
+                or not isinstance(inventory, list) or not inventory):
             raise ValueError("Missing image scan inventory")
         for result in inventory:
             if not isinstance(result, dict):

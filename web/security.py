@@ -15,7 +15,8 @@ from urllib.parse import urlsplit
 def canonical_https_origin(raw: str) -> str:
     """Validate the configured origin and match browser default-port handling."""
     if (not isinstance(raw, str) or len(raw) > 2048
-            or any(ord(char) <= 32 or ord(char) == 127 for char in raw) or "\\" in raw):
+            or any(ord(char) <= 32 or ord(char) == 127 for char in raw)
+            or any(char in raw for char in "\\?#")):
         raise ValueError("PUBLIC_BASE_URL must be an HTTPS origin")
     try:
         parsed = urlsplit(raw)

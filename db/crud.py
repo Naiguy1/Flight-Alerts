@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
+import stat
 import tempfile
 import time
 from typing import Any, Iterator
@@ -84,16 +85,25 @@ class DatabaseManager:
             self._location = f"file:flight_alerts_{secrets.token_hex(16)}?mode=memory&cache=shared"
             self._keeper = self._connect()
         else:
-            self.path = Path(location).resolve()
+            self.path = Path(location).absolute()
             self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            # SQLite would otherwise create a transient world-readable file
+            # under a conventional umask before chmod could tighten it.
+            flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                descriptor = os.open(self.path, flags, 0o600)
+            except FileExistsError:
+                if not stat.S_ISREG(self.path.lstat().st_mode):
+                    raise ValueError("SQLite database must be a regular file") from None
+            else:
+                os.close(descriptor)
+            os.chmod(self.path, 0o600)
             self._location = str(self.path)
         connection = self._connect()
         try:
             connection.execute("PRAGMA journal_mode=WAL")
         finally:
             connection.close()
-        if self.path is not None:
-            os.chmod(self.path, 0o600)
         with self._write() as connection:
             migrate(connection, _iso())
 
@@ -138,6 +148,28 @@ class DatabaseManager:
         if self._keeper is not None:
             self._keeper.close()
             self._keeper = None
+
+    @staticmethod
+    def _owns_scan(connection, job_id, lease_token, now: str) -> bool:
+        if job_id is None and lease_token is None:
+            return True
+        if type(job_id) is not int or job_id < 1 or not isinstance(lease_token, str) or not lease_token:
+            return False
+        return connection.execute(
+            "SELECT 1 FROM scan_jobs WHERE id=? AND status='running' AND lease_token=? AND lease_expires_at>?",
+            (job_id, lease_token, now),
+        ).fetchone() is not None
+
+    @staticmethod
+    def _owns_service(connection, lease_name, lease_token, now: str) -> bool:
+        if lease_name is None and lease_token is None:
+            return True
+        if not isinstance(lease_name, str) or not isinstance(lease_token, str) or not lease_name or not lease_token:
+            return False
+        return connection.execute(
+            "SELECT 1 FROM service_leases WHERE name=? AND lease_token=? AND lease_expires_at>?",
+            (lease_name, lease_token, now),
+        ).fetchone() is not None
 
     def get_config(self, default_config: dict) -> dict:
         with self._read() as connection:
@@ -207,7 +239,8 @@ class DatabaseManager:
         cutoff = _iso(_now() - timedelta(hours=max(0, float(window_hours))))
         row = connection.execute(
             "SELECT MIN(alerted_price_usd) FROM alert_logs WHERE origin=? AND destination=? "
-            "AND COALESCE(created_at,sent_at)>=?", (origin, destination, cutoff),
+            "AND COALESCE(created_at,sent_at)>=? AND alerted_price_usd>0 AND alerted_price_usd<=10000000",
+            (origin, destination, cutoff),
         ).fetchone()
         previous = row[0]
         if previous is None:
@@ -246,12 +279,15 @@ class DatabaseManager:
 
     def reserve_alert(self, offer: Any, average_price: float, discount_percent: float,
                       baseline_source: str = "", window_hours: int = 48,
-                      improvement_usd: float = 35, improvement_percent: float = 10) -> int | None:
+                      improvement_usd: float = 35, improvement_percent: float = 10,
+                      *, scan_job_id: int | None = None, scan_lease_token: str | None = None) -> int | None:
         offer = _offer_dict(offer)
         average_price = _positive(average_price)
         if isinstance(discount_percent, bool) or not math.isfinite(float(discount_percent)) or not 0 <= float(discount_percent) <= 100:
             raise ValueError("invalid discount")
         with self._write() as connection:
+            if not self._owns_scan(connection, scan_job_id, scan_lease_token, _iso()):
+                return None
             config_row = connection.execute("SELECT value_json FROM app_config WHERE id=1").fetchone()
             if config_row and json.loads(config_row[0]).get("filters", {}).get("alerts_paused", False):
                 return None
@@ -601,8 +637,8 @@ class DatabaseManager:
             recent, stats = [], []
             if codes:
                 placeholders = ",".join("?" for _ in codes)
-                parameters = [*codes, cutoff, _now().date().isoformat()]
-                where = f"destination IN ({placeholders}) AND observed_at>=? AND outbound_date>=? AND price_usd>0 AND currency='USD'"
+                parameters = [*codes, cutoff, _iso(_now() + timedelta(minutes=5)), _now().date().isoformat()]
+                where = f"destination IN ({placeholders}) AND observed_at>=? AND observed_at<=? AND outbound_date>=? AND price_usd>0 AND price_usd<=10000000 AND currency='USD'"
                 recent = [dict(row) for row in connection.execute(
                     f"SELECT * FROM price_history WHERE {where} ORDER BY price_usd,observed_at DESC LIMIT 20", parameters)]
                 for row in recent:
@@ -661,10 +697,13 @@ class DatabaseManager:
                 row["status"] = json.loads(serialized) if serialized else None
             return rows
 
-    def update_flight_status(self, watch_id: int, status: dict) -> bool:
+    def update_flight_status(self, watch_id: int, status: dict, *,
+                             lease_name: str | None = None, lease_token: str | None = None) -> bool:
         serialized = _json(status)
         meaningful = ("status", "delay_minutes", "departure_gate", "arrival_gate")
         with self._write() as connection:
+            if not self._owns_service(connection, lease_name, lease_token, _iso()):
+                return False
             row = connection.execute("SELECT * FROM watched_flights WHERE id=?", (watch_id,)).fetchone()
             if row is None:
                 return False
@@ -692,7 +731,8 @@ class DatabaseManager:
                                      (key, _iso(_now() - timedelta(seconds=max(0, int(ttl_seconds)))))).fetchone()
             return json.loads(row[0]) if row else None
 
-    def set_provider_cache(self, key: str, offers: list[dict]) -> None:
+    def set_provider_cache(self, key: str, offers: list[dict], *,
+                           lease_name: str | None = None, lease_token: str | None = None) -> bool:
         if not isinstance(key, str) or not 1 <= len(key) <= 256:
             raise ValueError("invalid cache key")
         if not isinstance(offers, list) or len(offers) > 5000:
@@ -705,8 +745,11 @@ class DatabaseManager:
         if len(encoded.encode("utf-8")) > 2 * 1024 * 1024:
             raise ValueError("offer cache too large")
         with self._write() as connection:
+            if not self._owns_service(connection, lease_name, lease_token, _iso()):
+                return False
             connection.execute("INSERT INTO provider_cache VALUES(?,?,?) ON CONFLICT(cache_key) DO UPDATE SET offers_json=excluded.offers_json,updated_at=excluded.updated_at",
                                (key, encoded, _iso()))
+            return True
 
     def delete_watch(self, watch_id: int) -> bool:
         with self._write() as connection:
@@ -715,14 +758,18 @@ class DatabaseManager:
     def health(self) -> dict:
         with self._read() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version != SCHEMA_VERSION:
+                raise RuntimeError("database schema is not ready")
             times = connection.execute("SELECT MAX(started_at),MAX(finished_at),MAX(CASE WHEN status='succeeded' THEN finished_at END) FROM scan_jobs").fetchone()
             return {"ready": version == SCHEMA_VERSION, "schema_version": version,
                     "last_scan_started_at": times[0], "last_scan_completed_at": times[1], "last_scan_success_at": times[2]}
 
     def backup(self, destination: str | Path) -> str:
-        target = Path(destination).resolve()
+        target = Path(destination).absolute()
         if target == self.path:
             raise ValueError("backup must use a separate destination")
+        if target.exists() or target.is_symlink():
+            raise ValueError("backup destination already exists")
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         descriptor, temporary = tempfile.mkstemp(prefix=".flight-backup-", dir=target.parent)
         os.close(descriptor)
@@ -733,7 +780,9 @@ class DatabaseManager:
                     if backup.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                         raise RuntimeError("backup integrity check failed")
             os.chmod(temporary, 0o600)
-            os.replace(temporary, target)
+            # An exclusive hard link publishes the checked snapshot atomically
+            # without overwriting a destination created during the backup.
+            os.link(temporary, target)
             return str(target)
         finally:
             if os.path.exists(temporary):

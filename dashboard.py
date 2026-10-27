@@ -303,7 +303,7 @@ def create_app(runtime=None, database=None) -> FastAPI:
         active = [d["code"] for d in cfg["monitored_destinations"] if d["code"].lower() not in blocked and d["city"].lower() not in blocked]
         snapshot = _safe_snapshot(request.app.state.db.dashboard_snapshot(active, freshness_hours=cfg["filters"].get("freshness_hours", 24)))
         token = request.app.state.csrf.issue("admin")
-        messages = {"saved": "Settings saved.", "invited": "Verification email queued; confirmation is required before alerts.", "disabled": "Recipient disabled.", "queued": "Work queued for the worker.", "busy": "A scan is already queued, running, or in its cooldown period.", "watch": "Flight watch saved.", "removed": "Item removed."}
+        messages = {"saved": "Settings saved.", "invited": "Verification email queued; confirmation is required before alerts.", "confirmed": "This recipient is already confirmed.", "disabled": "Recipient disabled.", "queued": "Work queued for the worker.", "busy": "A scan is already queued, running, or in its cooldown period.", "watch": "Flight watch saved.", "removed": "Item removed."}
         response = HTMLResponse(TEMPLATES.get_template("dashboard.html").render(
             cfg=cfg, config_version=version, csrf_token=token, snapshot=snapshot,
             recipients=request.app.state.db.list_recipients(), watches=request.app.state.db.list_watched_flights(),
@@ -327,9 +327,14 @@ def create_app(runtime=None, database=None) -> FastAPI:
         _quota(request, "invite")
         if len(request.app.state.db.list_recipients()) >= 100:
             raise HTTPException(409, "Recipient limit reached")
-        recipient = request.app.state.db.invite_recipient(email)
+        try:
+            recipient = request.app.state.db.invite_recipient(email)
+        except ValueError:
+            raise HTTPException(409, "Recipient could not be invited; review the recipient list") from None
         if not recipient["enabled"]:
             raise HTTPException(409, "Recipient is disabled; do not override an unsubscribe preference")
+        if recipient["verified"]:
+            return _redirect("confirmed")
         request.app.state.db.enqueue_notification(recipient["id"], "verification", {}, "verify:" + uuid.uuid4().hex)
         return _redirect("invited")
 
@@ -449,7 +454,10 @@ def create_app(runtime=None, database=None) -> FastAPI:
             raise HTTPException(422, "Invalid flight identifier or date")
         if len(request.app.state.db.list_watched_flights()) >= 25:
             raise HTTPException(409, "Flight watch limit reached")
-        request.app.state.db.watch_flight(code, departure.isoformat())
+        try:
+            request.app.state.db.watch_flight(code, departure.isoformat())
+        except ValueError:
+            raise HTTPException(409, "Flight watch could not be saved; review the current list") from None
         return _redirect("watch")
 
     @admin.post("/watches/remove", dependencies=[Depends(_admin_csrf)])

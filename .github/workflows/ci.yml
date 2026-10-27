@@ -148,7 +148,7 @@ jobs:
           format: json
           output: trivy-results.json
           exit-code: '0'
-          severity: HIGH,CRITICAL
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           scanners: vuln,secret
           ignore-unfixed: false
       - name: Enforce image release gate with safe annotations
@@ -162,7 +162,7 @@ jobs:
           format: json
           output: trivy-proxy-results.json
           exit-code: '0'
-          severity: HIGH,CRITICAL
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           scanners: vuln,secret
           ignore-unfixed: false
       - name: Enforce proxy image release gate
