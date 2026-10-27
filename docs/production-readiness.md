@@ -76,6 +76,15 @@ it based on its green severity gate. The [specific finding review](supply-chain.
 records fixes for every available patch and the evidence required to assess the
 remaining OpenPGP-only advisory. Rerun all four gates on the remediation commit.
 
+The intermediate remediation SHA `8dc5b2b3efca2426e89f3196990809a7663d4ed9`
+passed 262 tests with no skips, package/secret audits and CodeQL, but its
+[image gate failed](https://github.com/Naiguy1/Flight-Alerts/runs/122533991245)
+on vulnerable libraries bundled in the newer installer. This candidate is also
+superseded. Both unused installer distributions are removed from the shipped
+image; build-time dependency checking, final locked distribution inventory and
+full image scanning remain mandatory. The same report confirmed the router fix
+and absence of affected OpenPGP packages from 1029 proxy build dependencies.
+
 An administrator must arrange an eligible reviewer and use
 `python -m tools.apply_branch_protection --repository Naiguy1/Flight-Alerts --apply`,
 then run the same command without `--apply` to verify. This requires a privately

@@ -120,11 +120,10 @@ jobs:
       - name: Inspect image permissions, installed dependencies, and excluded files
         run: |
           test "$(docker image inspect --format '{{.Config.User}}' flight-alerts:ci)" = '10001:10001'
-          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -m pip check
-          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci /usr/local/bin/python -m pip check
-          expected_pip=$(python3 -c "from pathlib import Path; from tools.verify_lock import read_lock; print(read_lock(Path('requirements.txt'))['pip'])")
-          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges -e EXPECTED_PIP="$expected_pip" flight-alerts:ci python -c "import os, pip; assert pip.__version__ == os.environ['EXPECTED_PIP']"
-          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges -e EXPECTED_PIP="$expected_pip" flight-alerts:ci /usr/local/bin/python -c "import os, pip; assert pip.__version__ == os.environ['EXPECTED_PIP']"
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -c "import importlib.metadata as m, json; print(json.dumps([{'name':d.metadata['Name'],'version':d.version} for d in m.distributions()]))" > runtime-packages.json
+          python3 -m tools.verify_lock --installed runtime-packages.json
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -c "import importlib.util; assert importlib.util.find_spec('pip') is None"
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci /usr/local/bin/python -c "import importlib.util; assert importlib.util.find_spec('pip') is None"
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -c "from pathlib import Path; assert not any(Path('/app').glob('.env*')); assert not Path('/app/.git').exists()"
       - name: Verify runtime imports and timezone data
         run: docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -c "import ssl, sqlite3, yaml, fastapi; from zoneinfo import ZoneInfo; ZoneInfo('America/Denver')"

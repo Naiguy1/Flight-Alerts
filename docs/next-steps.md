@@ -21,8 +21,8 @@ the image gate validate/publish the SBOM inventory and all vulnerability severit
 counts. No scanner gate is disabled or weakened.
 
 The expanded image report also exposed old system/virtualenv installers and a
-proxy router finding. The follow-up pins the patched versions in both installer
-locations and the proxy build. The remaining module-level OpenPGP advisory needs
+proxy router finding. The follow-up removes both unused runtime installers and
+pins the fixed proxy router. The remaining module-level OpenPGP advisory needs
 the [scoped package-applicability review](supply-chain.md#follow-up-finding-review-2026-10-27)
 and the CI proof that affected packages are absent.
 

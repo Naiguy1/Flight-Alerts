@@ -17,7 +17,7 @@ from tools.ci_sbom_report import inventory, proxy_assessment
 from tools.ci_codeql_report import findings as codeql_findings
 from tools.publish_validation_report import build_report, trusted_event, trusted_pr_head
 from tools.healthcheck import worker_is_healthy
-from tools.verify_lock import read_lock
+from tools.verify_lock import read_lock, verify_installed
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -96,6 +96,20 @@ class HealthTests(unittest.TestCase):
 
 
 class SupplyChainTests(unittest.TestCase):
+    def test_final_image_inventory_requires_every_locked_runtime_package_and_no_installer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "installed.json"
+            runtime = {"pip": "26.2.2", "example": "1.0"}
+            path.write_text(json.dumps([{"name": "example", "version": "1.0"}]))
+            verify_installed(path, runtime)
+            for inventory in ([], [{"name": "example", "version": "0.9"}],
+                              [{"name": "example", "version": "1.0"}, {"name": "pip", "version": "26.2.2"}],
+                              [{"name": "example", "version": "1.0"}, {"name": "unlocked", "version": "1"}],
+                              [{"name": "example", "version": "1.0"}, {"name": "example", "version": "1.0"}]):
+                path.write_text(json.dumps(inventory))
+                with self.subTest(inventory=inventory), self.assertRaises(ValueError):
+                    verify_installed(path, runtime)
+
     def test_real_lock_shape_and_runtime_consistency(self):
         runtime = read_lock(ROOT / "requirements.txt")
         for name in ("requirements-dev.txt", "requirements-scraper.txt"):

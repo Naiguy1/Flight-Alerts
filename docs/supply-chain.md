@@ -72,7 +72,7 @@ from the original bounded summary. They were reviewed rather than suppressed:
 
 | Finding | Resolution / applicability |
 |---|---|
-| `pip 25.0.1`: CVE-2025-8869, CVE-2026-13346, CVE-2026-3219, CVE-2026-6357, CVE-2026-8643, CVE-2026-1703 | Pin `pip 26.2.2` in all environments, reusing its already resolved/audited development wheel hash. Upgrade both the base-image system installer and application virtualenv; CI verifies both against the runtime lock. Runtime/optional package audits and final image scans must pass again. |
+| `pip 25.0.1`: CVE-2025-8869, CVE-2026-13346, CVE-2026-3219, CVE-2026-6357, CVE-2026-8643, CVE-2026-1703; vulnerable libraries bundled in `pip 26.2.2` | Remove both complete installer distributions from the final image after installation and dependency checking. Pin the build installer using its already resolved development wheel hash. Verify the final image's application distributions exactly match the runtime lock (excluding the removed build tool), and assert neither Python environment can import `pip`. |
 | `github.com/go-chi/chi/v5 v5.3.2`: CVE-2026-114437 | Build with `v5.4.0`, the [upstream security fix](https://github.com/go-chi/chi/releases/tag/v5.4.0); compile and scan the final proxy again. |
 | `golang.org/x/crypto v0.57.0`: GO-2026-5932, scanner severity UNKNOWN | The [Go security team's reviewed advisory](https://github.com/golang/vulndb/blob/master/data/reports/GO-2026-5932.yaml) applies specifically to unmaintained `openpgp` packages, with no fixed module version. The module is also used for unrelated cryptography. Verify affected-package absence as described below; retain the module-level scanner observation. |
 
@@ -85,3 +85,14 @@ diagnostic. This supports a package-level not-affected assessment when those
 checks pass; it does not declare the whole `x/crypto` module vulnerability-free.
 An eligible independent reviewer must review this evidence before release.
 There is no Trivy ignore rule, severity downgrade or disabled scanner gate.
+
+The intermediate installer upgrade at
+`8dc5b2b3efca2426e89f3196990809a7663d4ed9` correctly failed the image gate:
+`pip 26.2.2` bundles vulnerable `msgpack 1.1.2`, `setuptools 70.3.0` and
+`urllib3 2.7.0`. A package audit of top-level requirements does not assess every
+vendored dependency. The application does not install packages at runtime, so
+the final image uninstalls the entire unused installer, including that code and
+its scripts. Application package metadata is retained. `pip check` runs during
+the build; final distribution inventory verification and the unchanged image
+scanner verify the shipped result independently. This removes vulnerable code
+rather than deleting metadata or suppressing scanner observations.
