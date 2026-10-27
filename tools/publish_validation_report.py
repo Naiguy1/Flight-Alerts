@@ -1,7 +1,8 @@
 """Publish safe CI diagnostics in check output readable by repository connectors.
 
 Only trusted pushes/manual runs on main or production-hardening may publish.
-Fork and pull-request events never use a write token. This helper does not alter
+Fork/untrusted PR events never publish. The exact same-repo hardening PR may
+publish only synthetic test diagnostics. This helper does not alter
 any release gate and treats missing reports as failure, never success.
 """
 from __future__ import annotations
@@ -35,6 +36,34 @@ def trusted_event(environment) -> bool:
         and environment.get("GITHUB_REF") in BRANCHES
         and bool(re.fullmatch(r"[0-9a-f]{40}", environment.get("GITHUB_SHA", "")))
     )
+
+
+def trusted_pr_head(environment) -> str | None:
+    """Allow synthetic test diagnostics only for the exact same-repository PR."""
+    if (environment.get("GITHUB_REPOSITORY") != REPOSITORY
+            or environment.get("GITHUB_EVENT_NAME") != "pull_request"):
+        return None
+    match = re.fullmatch(r"refs/pull/([1-9][0-9]*)/merge", environment.get("GITHUB_REF", ""))
+    filename = environment.get("GITHUB_EVENT_PATH", "")
+    if not match or not filename:
+        return None
+    try:
+        path = Path(filename)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
+            return None
+        event = json.loads(path.read_text())
+        pull = event["pull_request"]
+        head, base = pull["head"], pull["base"]
+        if (event.get("number") != int(match[1])
+                or event["repository"]["full_name"] != REPOSITORY
+                or head["repo"]["full_name"] != REPOSITORY
+                or base["repo"]["full_name"] != REPOSITORY
+                or head["ref"] != "production-hardening" or base["ref"] != "main"
+                or not re.fullmatch(r"[0-9a-f]{40}", head["sha"])):
+            return None
+        return head["sha"]
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
 
 
 def test_report(path: Path) -> tuple[bool, str]:
@@ -119,14 +148,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("kind", choices=["Tests", "Security", "Image", "CodeQL"])
     args = parser.parse_args()
-    if not trusted_event(os.environ):
+    pr_head = trusted_pr_head(os.environ) if args.kind == "Tests" else None
+    if not trusted_event(os.environ) and pr_head is None:
         print("Diagnostic publication skipped for an untrusted event or branch")
         return
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token or any(character.isspace() for character in token):
         raise SystemExit("A scoped checks token is required; no credential diagnostics emitted")
     payload = build_report(args.kind, Path.cwd(), os.environ.get("GATE_RESULT", "failure"))
-    payload["head_sha"] = os.environ["GITHUB_SHA"]
+    payload["head_sha"] = pr_head or os.environ["GITHUB_SHA"]
+    if pr_head is not None:
+        payload["name"] = "Validation report: PR Tests"
     request = Request(
         f"https://api.github.com/repos/{REPOSITORY}/check-runs",
         data=json.dumps(payload).encode(), method="POST",

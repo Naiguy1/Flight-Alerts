@@ -50,7 +50,7 @@ jobs:
       - name: Check dependency consistency
         run: python -m pip check
       - name: Publish connector-readable validation diagnostics
-        if: always() && github.event_name != 'pull_request'
+        if: always() && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'production-hardening' && github.event.pull_request.base.ref == 'main'))
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GATE_RESULT: ${{ job.status }}

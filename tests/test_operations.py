@@ -14,7 +14,7 @@ from tools.backup import create_backup, restore_backup, verify_backup
 from tools.ci_test_report import escape, escape_property
 from tools.ci_security_report import findings
 from tools.ci_codeql_report import findings as codeql_findings
-from tools.publish_validation_report import build_report, trusted_event
+from tools.publish_validation_report import build_report, trusted_event, trusted_pr_head
 from tools.healthcheck import worker_is_healthy
 from tools.verify_lock import read_lock
 
@@ -228,6 +228,27 @@ class SupplyChainTests(unittest.TestCase):
         self.assertIn("py/extension", codeql_findings(report)[0])
         report["runs"][0]["results"] = [{"ruleId": "py/missing"}]
         self.assertIn("failed closed", codeql_findings(report)[0])
+
+
+    def test_pr_diagnostics_are_bound_to_exact_same_repo_head(self):
+        import copy
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "event.json"
+            environment = {"GITHUB_REPOSITORY": "Naiguy1/Flight-Alerts", "GITHUB_EVENT_NAME": "pull_request",
+                           "GITHUB_REF": "refs/pull/1/merge", "GITHUB_EVENT_PATH": str(path)}
+            event = {"number": 1, "repository": {"full_name": "Naiguy1/Flight-Alerts"}, "pull_request": {
+                "head": {"repo": {"full_name": "Naiguy1/Flight-Alerts"}, "ref": "production-hardening", "sha": "a" * 40},
+                "base": {"repo": {"full_name": "Naiguy1/Flight-Alerts"}, "ref": "main"}}}
+            path.write_text(json.dumps(event))
+            self.assertEqual(trusted_pr_head(environment), "a" * 40)
+            for field, value in (("ref", "other"), ("sha", "malformed"), ("repo", {"full_name": "untrusted/fork"})):
+                changed = copy.deepcopy(event)
+                changed["pull_request"]["head"][field] = value
+                path.write_text(json.dumps(changed))
+                self.assertIsNone(trusted_pr_head(environment))
+            path.write_text(json.dumps(event))
+            self.assertIsNone(trusted_pr_head({**environment, "GITHUB_REF": "refs/pull/2/merge"}))
+            self.assertIsNone(trusted_pr_head({**environment, "GITHUB_EVENT_NAME": "pull_request_target"}))
 
 
 if __name__ == "__main__":
