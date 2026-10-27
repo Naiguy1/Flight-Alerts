@@ -16,7 +16,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from db.crud import DatabaseManager
 from db.migrations import SCHEMA_VERSION
@@ -98,6 +98,43 @@ class DatabaseCase(unittest.TestCase):
 
 
 class MigrationAndStorageTests(DatabaseCase):
+    def test_wal_initialization_retries_only_transient_lock_errors_with_a_bound(self):
+        connect = DatabaseManager._connect
+        for failures, code, succeeds in ((2, sqlite3.SQLITE_BUSY, True),
+                                          (2, sqlite3.SQLITE_LOCKED, True),
+                                          (4, sqlite3.SQLITE_BUSY, False),
+                                          (1, sqlite3.SQLITE_ERROR, False)):
+            with self.subTest(failures=failures, code=code):
+                attempts = []
+                path = Path(self.temporary.name) / f"wal-{failures}-{code}.sqlite"
+                def controlled_connect(manager):
+                    connection = connect(manager)
+                    wrapper = Mock(wraps=connection)
+                    def execute(statement, *args):
+                        if statement == "PRAGMA journal_mode=WAL":
+                            attempts.append(statement)
+                            if len(attempts) <= failures:
+                                error = sqlite3.OperationalError("synthetic initialization error")
+                                error.sqlite_errorcode = code
+                                raise error
+                        return connection.execute(statement, *args)
+                    wrapper.execute.side_effect = execute
+                    return wrapper
+                with patch.object(DatabaseManager, "_connect", controlled_connect), patch("db.crud.time.sleep") as sleep:
+                    if succeeds:
+                        manager = DatabaseManager("sqlite:///" + str(path))
+                        try:
+                            self.assertTrue(manager.health()["ready"])
+                        finally:
+                            manager.close()
+                        self.assertEqual(len(attempts), failures + 1)
+                        self.assertEqual(sleep.call_count, failures)
+                    else:
+                        with self.assertRaises(sqlite3.OperationalError):
+                            DatabaseManager("sqlite:///" + str(path))
+                        self.assertEqual(len(attempts), 4 if code == sqlite3.SQLITE_BUSY else 1)
+                        self.assertEqual(sleep.call_count, 3 if code == sqlite3.SQLITE_BUSY else 0)
+
     def test_idempotent_startup_and_secure_file_mode(self):
         self.assertTrue(self.db.health()["ready"])
         self.assertEqual(self.db.health()["schema_version"], SCHEMA_VERSION)
