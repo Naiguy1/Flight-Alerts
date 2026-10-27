@@ -1,5 +1,5 @@
 # Official multi-architecture manifest verified in docker-library/repo-info.
-FROM python:3.12-slim@sha256:12316debbfb86890f6b2d825820612741ba527ad5a44e3902759141d572bfe8f AS dependencies
+FROM python:3.12-alpine@sha256:5789aa194f757888f41fa3d48e14b6feaa1b57c0af0b56fcb1372d6474d3bff0 AS dependencies
 WORKDIR /build
 COPY requirements.txt requirements-scraper.txt ./
 ARG INSTALL_SCRAPER=false
@@ -7,7 +7,7 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/python -m pip install --no-cache-dir --require-hashes -r requirements.txt \
     && if [ "$INSTALL_SCRAPER" = "true" ]; then /opt/venv/bin/python -m pip install --no-cache-dir --require-hashes -r requirements-scraper.txt; fi
 
-FROM python:3.12-slim@sha256:12316debbfb86890f6b2d825820612741ba527ad5a44e3902759141d572bfe8f
+FROM python:3.12-alpine@sha256:5789aa194f757888f41fa3d48e14b6feaa1b57c0af0b56fcb1372d6474d3bff0
 WORKDIR /app
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
@@ -15,8 +15,9 @@ ENV PATH="/opt/venv/bin:$PATH" \
     DATABASE_URL=sqlite:////app/data/flight_deals.db \
     CONFIG_PATH=/app/config.yaml \
     WORKER_HEARTBEAT_PATH=/app/data/worker-heartbeat.json
-RUN groupadd --gid 10001 flight \
-    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin flight \
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S -g 10001 flight \
+    && adduser -S -D -H -u 10001 -G flight flight \
     && mkdir -p /app/data \
     && chown 10001:10001 /app/data \
     && chmod 0700 /app/data

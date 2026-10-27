@@ -354,7 +354,7 @@ class WebTests(unittest.TestCase):
         from dashboard import create_app
         from fastapi.testclient import TestClient
         app = create_app(replace(self.runtime, public_base_url="https://TESTSERVER:443/"), self.db)
-        with TestClient(app, base_url="https://testserver", raise_server_exceptions=False) as client:
+        with TestClient(app, base_url="https://testserver", raise_server_exceptions=False, follow_redirects=False) as client:
             response = client.get("/", auth=self.auth)
             self.assertEqual(response.status_code, 200)
             token = re.search(r'name="csrf_token" value="([^"]+)"', response.text).group(1)

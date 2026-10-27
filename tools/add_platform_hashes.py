@@ -39,12 +39,21 @@ def supplement() -> None:
         folder = Path(directory)
         source = folder / "pins.txt"
         source.write_text("\n".join(f"{name}=={version}" for name, version in sorted(wanted.items())) + "\n")
-        subprocess.run([
+        completed = subprocess.run([
             sys.executable, "-m", "pip", "download", "--disable-pip-version-check", "--no-deps",
-            "--only-binary=:all:", "--platform", "musllinux_1_2_x86_64", "--implementation", "cp",
+            "--only-binary=:all:", "--platform", "musllinux_1_2_x86_64", "--platform", "musllinux_1_1_x86_64", "--implementation", "cp",
             "--python-version", "3.12", "--abi", "cp312", "--dest", str(folder / "wheels"),
             "--index-url", "https://pypi.org/simple", "-r", str(source),
-        ], check=True)
+        ], capture_output=True, text=True)
+        if completed.returncode:
+            # Fixed public index, exact public version pins; never publish arbitrary
+            # pip/config diagnostics or URLs that could carry credentials.
+            errors = []
+            for line in completed.stderr.splitlines():
+                if line.startswith("ERROR: Could not find a version that satisfies") or line.startswith("ERROR: No matching distribution found"):
+                    errors.append(line[:1000])
+            (ROOT / "platform-hash-error.txt").write_text("\n".join(errors) or "Compatible-wheel resolution failed; inspect workflow privately")
+            raise SystemExit("Compatible-wheel resolution failed")
         hashes = {}
         for path in (folder / "wheels").glob("*.whl"):
             with zipfile.ZipFile(path) as archive:
@@ -76,12 +85,23 @@ def supplement() -> None:
     print("Added actual compatible wheel hashes; exact dependency versions are unchanged")
 
 
-def publish_existing() -> None:
+def publish_existing(failure=False) -> None:
     if not trusted_event(os.environ) or os.environ.get("GITHUB_REF") != "refs/heads/production-hardening":
         raise SystemExit("Supplemental hash publication is restricted to the trusted hardening branch")
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token or any(character.isspace() for character in token):
         raise SystemExit("Scoped checks token missing")
+    if failure:
+        path = ROOT / "platform-hash-error.txt"
+        message = path.read_text()[:6000] if path.is_file() else "Wheel resolution did not produce a report"
+        payload = {"name": "Supplemental wheel hashes: failure", "head_sha": os.environ["GITHUB_SHA"],
+                   "status": "completed", "conclusion": "failure", "output": {"title": "Wheel resolution failed", "summary": message, "text": message}}
+        request = Request("https://api.github.com/repos/Naiguy1/Flight-Alerts/check-runs", method="POST",
+                          data=json.dumps(payload).encode(), headers={"Authorization": "Bearer " + token,
+                          "Accept": "application/vnd.github+json", "Content-Type": "application/json"})
+        with build_opener(NoRedirects()).open(request, timeout=20):
+            pass
+        return
     for filename in FILES:
         path = ROOT / filename
         read_lock(path)
@@ -109,8 +129,14 @@ def publish_existing() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--publish-existing", action="store_true")
+    parser.add_argument("--publish-failure", action="store_true")
     args = parser.parse_args()
-    publish_existing() if args.publish_existing else supplement()
+    if args.publish_failure:
+        publish_existing(failure=True)
+    elif args.publish_existing:
+        publish_existing()
+    else:
+        supplement()
 
 
 if __name__ == "__main__":

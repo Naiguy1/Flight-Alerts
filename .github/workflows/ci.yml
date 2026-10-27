@@ -122,6 +122,8 @@ jobs:
           test "$(docker image inspect --format '{{.Config.User}}' flight-alerts:ci)" = '10001:10001'
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -m pip check
           docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -c "from pathlib import Path; assert not any(Path('/app').glob('.env*')); assert not Path('/app/.git').exists()"
+      - name: Verify runtime imports and timezone data
+        run: docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -c "import ssl, sqlite3, yaml, fastapi; from zoneinfo import ZoneInfo; ZoneInfo('America/Denver')"
       - name: Build hardened HTTPS proxy
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:

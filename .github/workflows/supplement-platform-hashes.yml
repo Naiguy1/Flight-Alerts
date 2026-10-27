@@ -29,3 +29,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python -m tools.add_platform_hashes --publish-existing
+      - name: Publish safe failure diagnostics
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -m tools.add_platform_hashes --publish-failure

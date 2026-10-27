@@ -137,7 +137,10 @@ class SupplyChainTests(unittest.TestCase):
         proxy = compose["services"]["proxy"]
         self.assertEqual(proxy["build"]["dockerfile"], "Dockerfile.proxy")
         proxy_image = (ROOT / "Dockerfile.proxy").read_text()
-        self.assertIn("setcap -r /usr/bin/caddy", proxy_image)
+        self.assertIn("CGO_ENABLED=0", proxy_image)
+        self.assertIn("COPY --from=builder /out/caddy /usr/bin/caddy", proxy_image)
+        self.assertIn("golang.org/x/net@v0.60.0", proxy_image)
+        self.assertIn("request delete", (ROOT / "docs/Caddyfile").read_text())
         self.assertIn("chmod 0700 /data/caddy /config/caddy", proxy_image)
 
     def test_lock_workflow_has_no_repository_write_or_pr_trigger(self):

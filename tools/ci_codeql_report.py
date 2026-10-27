@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 
 from tools.ci_test_report import escape
@@ -16,20 +17,34 @@ def findings(payload: dict) -> list[str]:
     for run in payload["runs"]:
         if not isinstance(run, dict) or not isinstance(run.get("results", []), list):
             raise ValueError("Invalid SARIF results")
-        rules = run.get("tool", {}).get("driver", {}).get("rules", [])
-        if not isinstance(rules, list):
-            raise ValueError("Invalid SARIF rules")
-        by_id = {rule.get("id"): rule for rule in rules if isinstance(rule, dict)}
+        tool = run.get("tool", {})
+        components = [tool.get("driver", {})] + tool.get("extensions", [])
+        all_rules = []
+        for component in components:
+            rules = component.get("rules", [])
+            if not isinstance(rules, list):
+                raise ValueError("Invalid SARIF rules")
+            all_rules.extend(rule for rule in rules if isinstance(rule, dict))
+        by_id = {rule.get("id"): rule for rule in all_rules}
         for item in run.get("results", []):
             if not isinstance(item, dict):
                 raise ValueError("Invalid SARIF result")
             if any(isinstance(suppression, dict) and suppression.get("status") == "accepted" for suppression in item.get("suppressions", [])):
                 continue
-            rule_id = item.get("ruleId", "unclassified")
+            reference = item.get("rule", {})
+            rule_id = item.get("ruleId", reference.get("id", "unclassified"))
             rule = by_id.get(rule_id)
             if rule is None:
-                index = item.get("ruleIndex")
-                rule = rules[index] if type(index) is int and 0 <= index < len(rules) else {}
+                component_reference = reference.get("toolComponent", {})
+                extension = component_reference.get("index")
+                component = components[extension + 1] if type(extension) is int and 0 <= extension < len(components) - 1 else components[0]
+                rules = component.get("rules", [])
+                index = reference.get("index", item.get("ruleIndex"))
+                rule = rules[index] if type(index) is int and 0 <= index < len(rules) else None
+            if rule is None:
+                result.append(f"CodeQL unknown rule {str(rule_id)[:200]}: missing rule metadata; gate failed closed")
+                continue
+            rule_id = rule.get("id", rule_id)
             properties = rule.get("properties", {})
             raw_severity = properties.get("security-severity")
             tags = properties.get("tags", [])
@@ -47,7 +62,13 @@ def findings(payload: dict) -> list[str]:
                 severity = str(number)
                 blocking = number >= 7
             if blocking:
-                result.append(f"CodeQL {str(rule_id)[:200]}: security severity {severity}; review the code-scanning alert (source contents withheld)")
+                location = item.get("locations", [{}])[0].get("physicalLocation", {}) if item.get("locations") else {}
+                uri = location.get("artifactLocation", {}).get("uri", "unavailable")
+                if not isinstance(uri, str) or not re.fullmatch(r"[A-Za-z0-9_./-]{1,300}", uri):
+                    uri = "unavailable"
+                line = location.get("region", {}).get("startLine")
+                line = str(line) if type(line) is int and line > 0 else "unknown"
+                result.append(f"CodeQL {str(rule_id)[:200]}: security severity {severity}; {uri}:{line} (source contents withheld)")
     return result
 
 

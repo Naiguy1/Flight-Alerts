@@ -19,4 +19,3 @@ class Delivery(TypedDict):
     attempts: int
     lease_token: str
     created_at: str
-

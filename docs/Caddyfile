@@ -1,6 +1,17 @@
 {
     email {$ACME_EMAIL}
     admin off
+    # Runtime error records can contain RequestURI even with access logs off.
+    # Remove the complete request object (URI, cookies, Authorization) globally.
+    log default {
+        output stdout
+        format filter {
+            wrap json
+            fields {
+                request delete
+            }
+        }
+    }
     http_port 8080
     https_port 8443
     servers {
