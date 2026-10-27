@@ -38,7 +38,7 @@ jobs:
         run: python -m pytest -q --junitxml=test-results.xml
       - name: Publish bounded synthetic test diagnostics
         if: always()
-        run: python -m tools.ci_test_report
+        run: python -m tools.ci_test_report --require-no-skips
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

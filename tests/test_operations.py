@@ -251,5 +251,15 @@ class SupplyChainTests(unittest.TestCase):
             self.assertIsNone(trusted_pr_head({**environment, "GITHUB_EVENT_NAME": "pull_request_target"}))
 
 
+    def test_ci_rejects_skipped_http_coverage(self):
+        from tools.ci_test_report import main
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.xml"
+            path.write_text('<testsuite><testcase name="http"><skipped/></testcase></testsuite>')
+            with patch("sys.argv", ["report", str(path), "--require-no-skips"]), patch("sys.stdout", new_callable=io.StringIO), self.assertRaises(SystemExit) as error:
+                main()
+            self.assertEqual(error.exception.code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

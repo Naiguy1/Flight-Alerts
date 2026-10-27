@@ -17,15 +17,24 @@ def escape_property(value: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", nargs="?", default="test-results.xml", type=Path)
+    parser.add_argument("--require-no-skips", action="store_true", help="Fail the supported CI target if any test is skipped")
     args = parser.parse_args()
     if args.report.is_symlink() or not args.report.is_file() or args.report.stat().st_size > 8 * 1024 * 1024:
         print("::error title=Test runner::No JUnit report was produced")
+        if args.require_no_skips:
+            raise SystemExit(1)
         return
     try:
         root = ET.parse(args.report).getroot()
     except (ET.ParseError, OSError):
         print("::error title=Test runner::Invalid JUnit report")
+        if args.require_no_skips:
+            raise SystemExit(1)
         return
+    cases = list(root.iter("testcase"))
+    if args.require_no_skips and (not cases or any(case.find("skipped") is not None for case in cases)):
+        print("::error title=Test runner::The supported CI target must execute every test without skips")
+        raise SystemExit(1)
     emitted = 0
     for case in root.iter("testcase"):
         for kind in ("failure", "error"):
