@@ -20,7 +20,7 @@ from urllib.parse import urlencode, urlsplit
 
 from fetcher.base import sanitize_booking_url
 
-_LOCAL_PART = re.compile(r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*\Z")
+_LOCAL_CHARACTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+/=?^_`{|}~-")
 _DOMAIN_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z")
 _MAX_BODY = 1_000_000
 
@@ -48,7 +48,9 @@ def normalize_email(address: str) -> str:
     except UnicodeError as exc:
         raise ValueError("Invalid email address") from exc
     labels = domain.split(".")
-    if (not 0 < len(local) <= 64 or not _LOCAL_PART.fullmatch(local)
+    local_parts = local.split(".")
+    valid_local = all(part and all(char in _LOCAL_CHARACTERS for char in part) for part in local_parts)
+    if (not 0 < len(local) <= 64 or not valid_local
             or len(labels) < 2 or len(domain) > 253
             or any(not _DOMAIN_LABEL.fullmatch(label) for label in labels)
             or len(local) + len(domain) + 1 > 254):
