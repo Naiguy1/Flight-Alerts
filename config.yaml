@@ -1,0 +1,278 @@
+scanner:
+  origins:
+  - SLC
+  - LAS
+  scan_interval_hours: 6
+  request_delay_seconds: 2.5
+  search_window:
+    min_days_ahead: 30
+    max_days_ahead: 180
+    sample_departure_offsets_days:
+    - 35
+    - 65
+    - 95
+    - 130
+    - 165
+    trip_duration_days: 7
+  currency: USD
+filters:
+  discount_threshold_percent: 50.0
+  deduplication_window_hours: 48
+  min_historical_samples_for_db_avg: 15
+  excluded_country_codes:
+  - US
+  allowed_domestic_airports:
+  - BOS
+  - MCO
+  - TPA
+  - RSW
+  - SDF
+  - LEX
+  - CVG
+  - SJU
+  - STT
+  - HNL
+  blocked_destinations: []
+  recipient_emails:
+  - naibowerbank@gmail.com
+monitored_destinations:
+- code: YYZ
+  city: Toronto
+  country_code: CA
+  baseline_avg_usd:
+    SLC: 480
+    LAS: 430
+- code: YVR
+  city: Vancouver
+  country_code: CA
+  baseline_avg_usd:
+    SLC: 420
+    LAS: 370
+- code: YUL
+  city: Montreal
+  country_code: CA
+  baseline_avg_usd:
+    SLC: 550
+    LAS: 490
+- code: YYC
+  city: Calgary
+  country_code: CA
+  baseline_avg_usd:
+    SLC: 400
+    LAS: 350
+- code: MEX
+  city: Mexico City
+  country_code: MX
+  baseline_avg_usd:
+    SLC: 520
+    LAS: 460
+- code: CUN
+  city: Cancun
+  country_code: MX
+  baseline_avg_usd:
+    SLC: 490
+    LAS: 420
+- code: GDL
+  city: Guadalajara
+  country_code: MX
+  baseline_avg_usd:
+    SLC: 460
+    LAS: 400
+- code: SJD
+  city: Cabo San Lucas / San Jose del Cabo
+  country_code: MX
+  baseline_avg_usd:
+    SLC: 430
+    LAS: 360
+- code: PVR
+  city: Puerto Vallarta
+  country_code: MX
+  baseline_avg_usd:
+    SLC: 470
+    LAS: 410
+- code: SJU
+  city: San Juan
+  country_code: PR
+  baseline_avg_usd:
+    SLC: 580
+    LAS: 520
+- code: STT
+  city: St. Thomas
+  country_code: VI
+  baseline_avg_usd:
+    SLC: 650
+    LAS: 590
+- code: LHR
+  city: London Heathrow
+  country_code: GB
+  baseline_avg_usd:
+    SLC: 950
+    LAS: 880
+- code: LGW
+  city: London Gatwick
+  country_code: GB
+  baseline_avg_usd:
+    SLC: 900
+    LAS: 830
+- code: MAN
+  city: Manchester
+  country_code: GB
+  baseline_avg_usd:
+    SLC: 980
+    LAS: 910
+- code: EDI
+  city: Edinburgh
+  country_code: GB
+  baseline_avg_usd:
+    SLC: 1020
+    LAS: 950
+- code: KEF
+  city: "Keflav\xEDk (Reykjavik)"
+  country_code: IS
+  baseline_avg_usd:
+    SLC: 750
+    LAS: 690
+- code: BKK
+  city: Bangkok
+  country_code: TH
+  baseline_avg_usd:
+    SLC: 1150
+    LAS: 1050
+- code: HKT
+  city: Phuket
+  country_code: TH
+  baseline_avg_usd:
+    SLC: 1200
+    LAS: 1100
+- code: CNX
+  city: Chiang Mai
+  country_code: TH
+  baseline_avg_usd:
+    SLC: 1250
+    LAS: 1150
+- code: TPE
+  city: Taipei
+  country_code: TW
+  baseline_avg_usd:
+    SLC: 1100
+    LAS: 1000
+- code: AKL
+  city: Auckland
+  country_code: NZ
+  baseline_avg_usd:
+    SLC: 1600
+    LAS: 1450
+- code: CHC
+  city: Christchurch
+  country_code: NZ
+  baseline_avg_usd:
+    SLC: 1680
+    LAS: 1520
+- code: HND
+  city: Tokyo (Haneda)
+  country_code: JP
+  baseline_avg_usd:
+    SLC: 1250
+    LAS: 1100
+- code: NRT
+  city: Tokyo (Narita)
+  country_code: JP
+  baseline_avg_usd:
+    SLC: 1200
+    LAS: 1050
+- code: ICN
+  city: Seoul
+  country_code: KR
+  baseline_avg_usd:
+    SLC: 1300
+    LAS: 1150
+- code: CDG
+  city: Paris
+  country_code: FR
+  baseline_avg_usd:
+    SLC: 1050
+    LAS: 950
+- code: FCO
+  city: Rome
+  country_code: IT
+  baseline_avg_usd:
+    SLC: 1150
+    LAS: 1050
+- code: AMS
+  city: Amsterdam
+  country_code: NL
+  baseline_avg_usd:
+    SLC: 1050
+    LAS: 980
+- code: BCN
+  city: Barcelona
+  country_code: ES
+  baseline_avg_usd:
+    SLC: 1020
+    LAS: 940
+- code: GRU
+  city: Sao Paulo
+  country_code: BR
+  baseline_avg_usd:
+    SLC: 1180
+    LAS: 1100
+- code: LIM
+  city: Lima
+  country_code: PE
+  baseline_avg_usd:
+    SLC: 890
+    LAS: 820
+- code: SYD
+  city: Sydney
+  country_code: AU
+  baseline_avg_usd:
+    SLC: 1650
+    LAS: 1500
+- code: BOS
+  city: Boston
+  country_code: US
+  baseline_avg_usd:
+    SLC: 420
+    LAS: 360
+- code: MCO
+  city: Orlando
+  country_code: US
+  baseline_avg_usd:
+    SLC: 390
+    LAS: 320
+- code: TPA
+  city: Tampa
+  country_code: US
+  baseline_avg_usd:
+    SLC: 390
+    LAS: 320
+- code: RSW
+  city: Fort Myers
+  country_code: US
+  baseline_avg_usd:
+    SLC: 440
+    LAS: 380
+- code: SDF
+  city: Louisville
+  country_code: US
+  baseline_avg_usd:
+    SLC: 430
+    LAS: 370
+- code: LEX
+  city: Lexington
+  country_code: US
+  baseline_avg_usd:
+    SLC: 460
+    LAS: 400
+- code: CVG
+  city: Cincinnati / N. Kentucky
+  country_code: US
+  baseline_avg_usd:
+    SLC: 390
+    LAS: 330
+- code: HNL
+  city: Oahu
+  country_code: US
+  baseline_avg_usd:
+    SLC: 600.0
+    LAS: 550.0
