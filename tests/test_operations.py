@@ -12,7 +12,8 @@ from unittest.mock import patch
 
 from tools.backup import create_backup, restore_backup, verify_backup
 from tools.ci_test_report import escape, escape_property
-from tools.ci_security_report import findings
+from tools.ci_security_report import findings, image_observations
+from tools.ci_sbom_report import inventory
 from tools.ci_codeql_report import findings as codeql_findings
 from tools.publish_validation_report import build_report, trusted_event, trusted_pr_head
 from tools.healthcheck import worker_is_healthy
@@ -169,6 +170,62 @@ class SupplyChainTests(unittest.TestCase):
         self.assertIn("Secret finding", result)
         self.assertNotIn("SYNTHETIC_SECRET", result)
         self.assertNotIn("/private", result)
+
+    def test_sbom_inventory_is_required_and_does_not_publish_properties(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sbom.json"
+            with self.assertRaises(ValueError):
+                inventory(path)
+            for payload in ({}, {"bomFormat": "CycloneDX", "specVersion": "1.6", "components": []}):
+                path.write_text(json.dumps(payload))
+                with self.assertRaises(ValueError):
+                    inventory(path)
+            path.write_text(json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.6", "components": [{
+                "type": "library", "name": "example-package", "version": "1.2.3",
+                "properties": [{"name": "private", "value": "SYNTHETIC_SECRET"}],
+            }]}))
+            result = inventory(path)
+            self.assertIn("example-package 1.2.3", result)
+            self.assertIn("SBOM SHA256:", result)
+            self.assertNotIn("SYNTHETIC_SECRET", result)
+
+    def test_sbom_rejects_malformed_components_and_command_injection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sbom.json"
+            for component in (None, {}, {"type": "library", "name": "example", "version": []},
+                              {"type": "library", "name": "example\n::error::injection", "version": "1"}):
+                path.write_text(json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.6",
+                                            "components": [component]}))
+                with self.subTest(component=component), self.assertRaises(ValueError):
+                    inventory(path)
+
+    def test_image_diagnostics_require_inspectable_sbom_even_with_clean_scans(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            clean = {"SchemaVersion": 2, "ArtifactName": "image", "Results": [{"Target": "image"}]}
+            for name in ("trivy-results.json", "trivy-proxy-results.json"):
+                (folder / name).write_text(json.dumps(clean))
+            report = build_report("Image", folder, "success")
+            self.assertEqual(report["conclusion"], "failure")
+            self.assertIn("inventory missing", report["output"]["text"])
+            (folder / "sbom.cdx.json").write_text(json.dumps({
+                "bomFormat": "CycloneDX", "specVersion": "1.6", "components": [
+                    {"type": "library", "name": "example", "version": "1"},
+                ],
+            }))
+            self.assertEqual(build_report("Image", folder, "success")["conclusion"], "success")
+
+    def test_lower_severity_image_findings_remain_visible_without_hiding_gate_failures(self):
+        report = {"SchemaVersion": 2, "ArtifactName": "image", "Results": [{"Vulnerabilities": [
+            {"Severity": "MEDIUM", "VulnerabilityID": "CVE-SYNTHETIC", "PkgName": "example",
+             "InstalledVersion": "1", "FixedVersion": "2"},
+        ]}]}
+        self.assertEqual(findings("trivy", report), [])
+        summary = image_observations(report)
+        self.assertIn("MEDIUM=1", summary)
+        self.assertIn("CVE-SYNTHETIC: example 1; fix 2", summary)
+        report["Results"][0]["Vulnerabilities"][0]["Severity"] = "HIGH"
+        self.assertEqual(len(findings("trivy", report)), 1)
 
     def test_diagnostic_publication_rejects_forks_pull_requests_and_other_refs(self):
         trusted = {"GITHUB_REPOSITORY": "Naiguy1/Flight-Alerts", "GITHUB_EVENT_NAME": "push",

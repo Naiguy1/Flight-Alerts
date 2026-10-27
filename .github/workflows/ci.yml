@@ -181,6 +181,8 @@ jobs:
           format: cyclonedx
           output: sbom.cdx.json
           scanners: vuln
+      - name: Validate and inspect SBOM package inventory
+        run: python3 -m tools.ci_sbom_report sbom.cdx.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: image-sbom

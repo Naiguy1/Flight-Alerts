@@ -39,6 +39,47 @@ limits growth. See the architecture runbook for single-host/SMTP limitations.
 
 ## Release record
 
+### Repository verification, 2026-10-27
+
+**Decision: hold production release pending the follow-up review and operator
+gates below.** CI success alone does not authorize public deployment.
+
+The initial hardening change was merged through
+[PR #1](https://github.com/Naiguy1/Flight-Alerts/pull/1). The verified merged SHA is
+`3c5b9e16bb89c3906b053bbab2a5d468303f2c8a`:
+
+| Evidence | Result |
+|---|---|
+| [Tests / Security / Image](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40599887085) | All passed; 249 tests, zero failures/errors, zero skips; locked HTTP integration tests executed; isolated backup/restore passed |
+| [Package and secret diagnostics](https://github.com/Naiguy1/Flight-Alerts/runs/122525288738) | Production and optional scraper audits found no known package vulnerabilities; full-history secret scan passed |
+| [Application/proxy diagnostics](https://github.com/Naiguy1/Flight-Alerts/runs/122526224211) | Neither image had a release-blocking finding; image-sbom artifact was generated |
+| [CodeQL](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40599887083) | Passed; no unsuppressed high/critical finding |
+| Independent approval on PR #1 | No approving review recorded; automated comment does not satisfy independent approval |
+| Main branch protection | `protected=false` when inspected; required policy has not been applied |
+
+The follow-up candidate corrects expiry checks after revalidation/SMTP pacing
+and suppresses an invitation confirmed while waiting. Image diagnostics now
+include the SBOM package/version inventory, its SHA256, and every severity count.
+Review the follow-up's exact SHA and checks separately; the baseline results in
+this table do not validate new commits. Local tests used available dependencies;
+locked installation was unavailable in the editing environment. CI is required
+to execute the complete locked suite without skips.
+
+An administrator must arrange an eligible reviewer and use
+`python -m tools.apply_branch_protection --repository Naiguy1/Flight-Alerts --apply`,
+then run the same command without `--apply` to verify. This requires a privately
+configured administration token; the repository connector has no administration
+write operation. Keep the one-reviewer policy unless the maintainer deliberately
+documents a different review policy. No bypass or policy exception was adopted.
+
+### Deployment sign-off (operator must complete)
+
+No production database, prior image, host credentials or external-service
+verification were provided for this review. The following fields are pending;
+synthetic migration/recovery tests do not complete these requirements. Record
+non-sensitive results and evidence locations here; keep backups/settings/secrets
+private.
+
 - Deployed Git SHA / image digest:
 - CI and security scan URLs:
 - External TLS / firewall / auth verification:
@@ -48,3 +89,6 @@ limits growth. See the architecture runbook for single-host/SMTP limitations.
 - Controlled verified-recipient delivery:
 - GitHub branch-protection verification:
 - Monitoring and rollback owner:
+- Eligible independent reviewer / approved candidate SHA / approval link:
+- Final merged SHA / Tests, Security, Image, CodeQL URLs:
+- Application and proxy image findings / SBOM checksum and review:

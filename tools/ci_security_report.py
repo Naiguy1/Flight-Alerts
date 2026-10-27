@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 
@@ -60,6 +61,27 @@ def findings(scanner: str, payload: dict) -> list[str]:
     else:
         raise ValueError("Unsupported scanner")
     return results
+
+
+def image_observations(payload: dict) -> str:
+    """Keep lower-severity findings visible without changing the release policy."""
+    findings("trivy", payload)
+    counts = Counter()
+    details = []
+    for result in payload["Results"]:
+        for item in result.get("Vulnerabilities") or []:
+            severity = item.get("Severity", "UNKNOWN")
+            if severity not in {"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+                raise ValueError("Invalid vulnerability severity")
+            counts[severity] += 1
+            details.append(f"{severity} {item.get('VulnerabilityID')}: {item.get('PkgName')} "
+                           f"{item.get('InstalledVersion')}; fix {item.get('FixedVersion') or 'not available'}"[:500])
+    lines = ["Image vulnerability counts: " + ", ".join(
+        f"{level}={counts[level]}" for level in ("UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"))]
+    lines.extend(details[:40])
+    if len(details) > 40:
+        lines.append(f"{len(details) - 40} additional findings: inspect the scanner report privately.")
+    return "\n".join(lines)
 
 
 def main() -> None:

@@ -56,3 +56,10 @@ diagnostics from the exact same-repository production-hardening-to-main PR may
 create a separately named PR Tests report, bound to the verified PR head SHA.
 CodeQL alone has the
 additional `security-events:write` scope required to upload its analysis.
+
+The Image job also validates the CycloneDX SBOM has a usable package inventory.
+Its connector-readable report includes package names/versions, the SBOM file's
+SHA256 and all image vulnerability severity counts, including lower severities.
+Missing/malformed inventory fails the gate. The full `image-sbom` artifact remains
+available for review; only bounded package identifiers, never arbitrary SBOM
+properties, scanner paths or matched secret contents, are published in diagnostics.

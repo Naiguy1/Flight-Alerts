@@ -411,6 +411,89 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(row["state"], "canceled")
         self.notifier.send_message.assert_not_called()
 
+    def test_fare_expiring_during_send_budget_wait_is_not_sent(self):
+        row = self.db.add(payload=deal_payload(NOW - timedelta(hours=48) + timedelta(seconds=1)))
+        def budget():
+            self.db.now += timedelta(seconds=2)
+            return True
+        self.service.send_budget = budget
+        self.assertEqual(self.service.process_pending(limit=1), 0)
+        self.assertEqual(row["error"], "fare_expired")
+        self.notifier.send_message.assert_not_called()
+
+    def test_latest_freshness_policy_applies_after_budget_wait(self):
+        row = self.db.add(payload=deal_payload(NOW - timedelta(hours=2)))
+        def budget():
+            self.config["filters"]["freshness_hours"] = 1
+            return True
+        self.service.send_budget = budget
+        self.assertEqual(self.service.process_pending(limit=1), 0)
+        self.assertEqual(row["error"], "fare_expired")
+        self.notifier.send_message.assert_not_called()
+
+    def test_explicit_digest_drops_fare_expiring_during_revalidation(self):
+        expiring = deal_payload(NOW - timedelta(hours=48) + timedelta(seconds=1))
+        expiring["offer"]["destination_city"] = "Expired fare"
+        row = self.db.add(kind="digest", payload={"deals": [expiring, deal_payload()]})
+        def revalidate(payload):
+            self.db.now += timedelta(seconds=2)
+            return True
+        self.service.revalidate = revalidate
+        self.assertEqual(self.service.process_pending(limit=1), 1)
+        self.assertEqual(row["state"], "sent")
+        self.assertNotIn("Expired fare", self.notifier.send_message.call_args.args[2])
+        self.assertIn("London", self.notifier.send_message.call_args.args[2])
+
+    def test_explicit_digest_expiring_during_budget_wait_is_canceled(self):
+        row = self.db.add(kind="digest", payload={"deals": [
+            deal_payload(NOW - timedelta(hours=48) + timedelta(seconds=1)),
+        ]})
+        def budget():
+            self.db.now += timedelta(seconds=2)
+            return True
+        self.service.send_budget = budget
+        self.assertEqual(self.service.process_pending(limit=1), 0)
+        self.assertEqual(row["error"], "fare_expired")
+        self.notifier.send_message.assert_not_called()
+
+    def test_grouped_digest_cancels_only_fare_expiring_during_budget_wait(self):
+        self.config["filters"]["digest_enabled"] = True
+        first = self.db.add(created=NOW - timedelta(hours=25), payload=deal_payload(
+            NOW - timedelta(hours=48) + timedelta(seconds=1)))
+        second = self.db.add(created=NOW - timedelta(hours=25))
+        def budget():
+            self.db.now += timedelta(seconds=2)
+            return True
+        self.service.send_budget = budget
+        self.assertEqual(self.service.process_pending(limit=1), 1)
+        self.assertEqual(first["state"], "canceled")
+        self.assertEqual(second["state"], "sent")
+        self.assertIsNotNone(self.db.recipients[1]["last_digest_at"])
+        self.assertEqual(self.notifier.send_message.call_count, 1)
+
+    def test_status_expiring_during_budget_wait_is_not_sent(self):
+        row = self.db.add(kind="status", created=NOW - timedelta(hours=6) + timedelta(seconds=1),
+                          payload={"flight_iata": "AA123", "flight_date": "2027-01-10",
+                                   "current": {"status": "active"}})
+        def budget():
+            self.db.now += timedelta(seconds=2)
+            return True
+        self.service.send_budget = budget
+        self.assertEqual(self.service.process_pending(limit=1), 0)
+        self.assertEqual(row["error"], "status_expired")
+        self.notifier.send_message.assert_not_called()
+
+    def test_confirmation_during_budget_wait_cancels_obsolete_invitation(self):
+        self.db.recipients[1]["verified"] = False
+        row = self.db.add(kind="verification", payload={})
+        def budget():
+            self.db.recipients[1]["verified"] = True
+            return True
+        self.service.send_budget = budget
+        self.assertEqual(self.service.process_pending(limit=1), 0)
+        self.assertEqual(row["error"], "already_verified")
+        self.notifier.send_message.assert_not_called()
+
     def test_lost_lease_prevents_smtp(self):
         self.db.add()
         self.db.renew_delivery_group = Mock(return_value=False)
