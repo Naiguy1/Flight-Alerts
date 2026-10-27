@@ -7,8 +7,9 @@ on:
       - 'requirements*.in'
       - 'tools/lock_dependencies.py'
       - '.github/workflows/lock-dependencies.yml'
+      - 'tools/publish_dependency_locks.py'
 permissions:
-  contents: read
+  contents: write
 jobs:
   resolve:
     runs-on: ubuntu-24.04
@@ -21,9 +22,14 @@ jobs:
         with:
           python-version: '3.12'
       - name: Resolve production and test environments
-        run: python -m tools.lock_dependencies --emit --scraper
+        run: python -m tools.lock_dependencies --scraper
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dependency-locks
           path: requirements*.txt
           retention-days: 7
+      - name: Publish generated locks on trusted branch push only
+        if: github.event_name == 'push' && github.ref == 'refs/heads/production-hardening' && github.repository == 'Naiguy1/Flight-Alerts'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -m tools.publish_dependency_locks
