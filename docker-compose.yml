@@ -1,49 +1,160 @@
+name: flight-alerts
+
+x-app: &app
+  image: flight-alerts:local
+  build:
+    context: .
+    args:
+      INSTALL_SCRAPER: ${INSTALL_SCRAPER:-false}
+  platform: linux/amd64
+  user: "10001:10001"
+  read_only: true
+  init: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+  pids_limit: 128
+  mem_limit: 512m
+  cpus: 1.0
+  volumes:
+    - flight_data:/app/data
+  environment: &common-env
+    DATABASE_URL: sqlite:////app/data/flight_deals.db
+    CONFIG_PATH: /app/config.yaml
+    PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?Set PUBLIC_BASE_URL in .env}
+    TOKEN_SECRET_FILE: /run/secrets/token_secret
+    PYTHONDONTWRITEBYTECODE: "1"
+  networks: [app]
+
 services:
+  migrate:
+    <<: *app
+    command: [python, -m, tools.migrate]
+    restart: "no"
+    secrets: [token_secret]
+    healthcheck:
+      disable: true
+
   flight_worker:
-    build: .
-    container_name: flight_worker
+    <<: *app
     restart: unless-stopped
-    env_file: .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     environment:
-      - DATABASE_URL=sqlite:////app/data/flight_deals.db
-      - CONFIG_PATH=/app/config.yaml
-      - TZ=America/Denver
-    volumes:
-      - /home/bowerbank-admin/flight-alerter/data:/app/data
-      - /home/bowerbank-admin/flight-alerter/config.yaml:/app/config.yaml
-    command: ["python", "main.py", "--config", "/app/config.yaml"]
-    networks:
-      - flight_internal
-    deploy:
-      resources:
-        limits:
-          memory: 512M
+      <<: *common-env
+      WORKER_HEARTBEAT_PATH: /app/data/worker-heartbeat.json
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME_FILE: /run/secrets/smtp_username
+      SMTP_PASSWORD_FILE: /run/secrets/smtp_password
+      ALERT_SENDER_EMAIL: ${ALERT_SENDER_EMAIL:-}
+      SERPAPI_API_KEY_FILE: /run/secrets/serpapi_api_key
+      KIWI_API_KEY_FILE: /run/secrets/kiwi_api_key
+      AVIATIONSTACK_API_KEY_FILE: /run/secrets/aviationstack_api_key
+      ENABLE_SCRAPER: ${ENABLE_SCRAPER:-false}
+    secrets:
+      - token_secret
+      - smtp_username
+      - smtp_password
+      - serpapi_api_key
+      - kiwi_api_key
+      - aviationstack_api_key
+    command: [python, main.py, --config, /app/config.yaml]
+    networks: [app, worker_egress]
+    healthcheck:
+      test: [CMD, python, -m, tools.healthcheck, worker]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
 
   flight_web:
-    build: .
-    container_name: flight_web
+    <<: *app
     restart: unless-stopped
-    env_file: .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     environment:
-      - DATABASE_URL=sqlite:////app/data/flight_deals.db
-      - CONFIG_PATH=/app/config.yaml
-      - TZ=America/Denver
+      <<: *common-env
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD_HASH_FILE: /run/secrets/admin_password_hash
+    secrets: [token_secret, admin_password_hash]
+    # Only the fixed Caddy address may supply forwarded client/protocol headers.
+    command: [uvicorn, "dashboard:app", --host, "0.0.0.0", --port, "8000", --proxy-headers, --forwarded-allow-ips, "172.30.80.2", --no-access-log, --limit-concurrency, "32", --timeout-keep-alive, "5"]
+    expose: ["8000"]
+    healthcheck:
+      test: [CMD, python, -m, tools.healthcheck, web]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  proxy:
+    image: flight-alerts-proxy:local
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    platform: linux/amd64
+    user: "10001:10001"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?Set PUBLIC_HOST in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env}
+      XDG_DATA_HOME: /data
+      XDG_CONFIG_HOME: /config
+    ports:
+      - "80:8080"
+      - "443:8443"
     volumes:
-      - /home/bowerbank-admin/flight-alerter/data:/app/data
-      - /home/bowerbank-admin/flight-alerter/config.yaml:/app/config.yaml
-    command: ["uvicorn", "dashboard:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
-    expose:
-      - "8000"
+      - ./docs/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,mode=1777
     networks:
-      - flight_internal
-      - jellyfin_default
-    deploy:
-      resources:
-        limits:
-          memory: 512M
+      app:
+        ipv4_address: 172.30.80.2
+      proxy_egress: {}
+    depends_on:
+      flight_web:
+        condition: service_healthy
 
 networks:
-  flight_internal:
-    driver: bridge
-  jellyfin_default:
-    external: true
+  app:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.80.0/24
+  worker_egress: {}
+  proxy_egress: {}
+
+volumes:
+  flight_data: {}
+  caddy_data: {}
+  caddy_config: {}
+
+# Compose file secrets are read-only mounts, not encrypted secret storage.
+# Host files require restrictive ownership/permissions and encrypted storage.
+secrets:
+  token_secret:
+    file: ${TOKEN_SECRET_FILE:-./secrets/token_secret}
+  admin_password_hash:
+    file: ${ADMIN_PASSWORD_HASH_FILE:-./secrets/admin_password_hash}
+  smtp_username:
+    file: ${SMTP_USERNAME_FILE:-./secrets/smtp_username}
+  smtp_password:
+    file: ${SMTP_PASSWORD_FILE:-./secrets/smtp_password}
+  serpapi_api_key:
+    file: ${SERPAPI_API_KEY_FILE:-./secrets/serpapi_api_key}
+  kiwi_api_key:
+    file: ${KIWI_API_KEY_FILE:-./secrets/kiwi_api_key}
+  aviationstack_api_key:
+    file: ${AVIATIONSTACK_API_KEY_FILE:-./secrets/aviationstack_api_key}

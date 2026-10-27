@@ -1,85 +1,85 @@
-import logging
-from datetime import datetime
-from typing import List
-import requests
-from fetcher.base import FlightFetcher, FlightOffer
+"""Kiwi Tequila adapter with validated USD round-trip offers."""
 
-logger = logging.getLogger(__name__)
+from datetime import date
+
+from fetcher.base import FlightFetcher, FlightOffer, ProviderError, sanitize_booking_url
+from fetcher.transport import ProviderTransport
 
 
 class KiwiTequilaFetcher(FlightFetcher):
+    name = "kiwi"
     BASE_URL = "https://tequila-api.kiwi.com/v2/search"
 
-    def __init__(self, api_key: str, currency: str = "USD"):
+    def __init__(self, api_key: str, currency: str = "USD", *, transport=None,
+                 budget_callback=None, timeout_seconds=20, deadline_seconds=60):
+        if currency != "USD":
+            raise ValueError("Only USD pricing is supported")
         self.api_key = api_key
         self.currency = currency
+        self.transport = transport if transport is not None else ProviderTransport(
+            self.name, budget_callback=budget_callback, timeout_seconds=timeout_seconds,
+            deadline_seconds=deadline_seconds,
+        )
+
+    def close(self):
+        self.transport.close()
 
     @staticmethod
-    def _format_kiwi_date(iso_date: str) -> str:
-        dt = datetime.strptime(iso_date, "%Y-%m-%d")
-        return dt.strftime("%d/%m/%Y")
+    def _format_kiwi_date(iso_date):
+        return date.fromisoformat(iso_date).strftime("%d/%m/%Y")
 
-    def fetch_offers(
-        self,
-        origin: str,
-        destination: str,
-        destination_city: str,
-        country_code: str,
-        outbound_date: str,
-        return_date: str,
-    ) -> List[FlightOffer]:
+    def fetch_offers(self, origin, destination, destination_city, country_code,
+                     outbound_date, return_date):
         if not self.api_key:
-            return []
-
-        headers = {"apikey": self.api_key}
-        params = {
-            "fly_from": f"airport:{origin}",
-            "fly_to": f"airport:{destination}",
+            raise ProviderError("provider_disabled")
+        query = dict(origin=origin, destination=destination, destination_city=destination_city,
+                     country_code=country_code, outbound_date=outbound_date, return_date=return_date)
+        try:
+            FlightOffer(**query, price_usd=1)
+        except ValueError:
+            raise ProviderError("invalid_query") from None
+        data = self.transport.get_json(self.BASE_URL, headers={"apikey": self.api_key}, params={
+            "fly_from": f"airport:{origin}", "fly_to": f"airport:{destination}",
             "date_from": self._format_kiwi_date(outbound_date),
             "date_to": self._format_kiwi_date(outbound_date),
             "return_from": self._format_kiwi_date(return_date),
             "return_to": self._format_kiwi_date(return_date),
-            "curr": self.currency,
-            "adults": 1,
-            "limit": 5,
-            "sort": "price",
-        }
-
-        try:
-            response = requests.get(self.BASE_URL, headers=headers, params=params, timeout=20)
-            response.raise_for_status()
-            payload = response.json()
-        except requests.RequestException as exc:
-            logger.error("Kiwi Tequila API error for %s->%s: %s", origin, destination, exc)
-            return []
-
-        offers: List[FlightOffer] = []
-        for row in payload.get("data", []):
-            price = row.get("price")
-            if price is None:
-                continue
-
-            airlines = row.get("airlines", ["Multiple Airlines"])
-            route_segments = row.get("route", [])
-            total_layovers = max(0, len(route_segments) - 2)
-            deep_link = row.get("deep_link", "https://www.kiwi.com")
-            detected_country = row.get("countryTo", {}).get("code", country_code) or country_code
-            detected_city = row.get("cityTo", destination_city) or destination_city
-
-            offers.append(
-                FlightOffer(
-                    origin=origin,
-                    destination=destination,
-                    destination_city=detected_city,
-                    country_code=detected_country,
-                    outbound_date=outbound_date,
-                    return_date=return_date,
-                    price_usd=float(price),
-                    airlines=airlines,
-                    layovers=total_layovers,
-                    source="Kiwi Tequila",
-                    booking_url=deep_link,
-                )
-            )
-
+            "curr": "USD", "adults": 1, "limit": 5, "sort": "price",
+        })
+        if not isinstance(data, dict):
+            raise ProviderError("invalid_payload")
+        if data.get("error") or data.get("status") in ("error", "ERROR"):
+            raise ProviderError("provider_rejected")
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            raise ProviderError("invalid_payload")
+        if len(rows) > 500:
+            raise ProviderError("response_too_large")
+        offers = []
+        malformed = 0
+        for row in rows:
+            try:
+                if not isinstance(row, dict):
+                    raise ValueError("Invalid offer")
+                for field, expected in (("flyFrom", origin), ("flyTo", destination)):
+                    if field in row and row[field] != expected:
+                        raise ValueError("Mismatched itinerary")
+                segments = row.get("route", [])
+                if not isinstance(segments, list) or len(segments) > 22 or any(not isinstance(segment, dict) for segment in segments):
+                    raise ValueError("Invalid segments")
+                country = row.get("countryTo") or {}
+                if not isinstance(country, dict):
+                    raise ValueError("Invalid country")
+                url = sanitize_booking_url(row.get("deep_link")) or "https://www.kiwi.com"
+                offers.append(FlightOffer(
+                    **{**query, "country_code": country.get("code") or country_code,
+                       "destination_city": row.get("cityTo") or destination_city},
+                    price_usd=row.get("price"), airlines=row.get("airlines") or ["Multiple Airlines"],
+                    layovers=max(0, len(segments) - 2), source="Kiwi Tequila", booking_url=url,
+                    metadata_scope="roundtrip",
+                ))
+            except (ValueError, TypeError, KeyError, OverflowError):
+                malformed += 1
+        if malformed and not offers:
+            raise ProviderError("invalid_offers")
         return offers

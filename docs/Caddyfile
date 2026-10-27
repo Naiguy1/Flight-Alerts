@@ -1,0 +1,38 @@
+{
+    email {$ACME_EMAIL}
+    admin off
+    # Runtime error records can contain RequestURI even with access logs off.
+    # Remove the complete request object (URI, cookies, Authorization) globally.
+    log default {
+        output stdout
+        format filter {
+            wrap json
+            fields {
+                request delete
+            }
+        }
+    }
+    http_port 8080
+    https_port 8443
+    servers {
+        timeouts {
+            read_header 10s
+            read_body 20s
+            write 30s
+            idle 60s
+        }
+    }
+}
+
+{$PUBLIC_HOST} {
+    # Automatic HTTPS, with external ports 80/443 mapped to unprivileged ports.
+    # Do not enable access logging: subscription tokens are in request URLs.
+    request_body {
+        max_size 64KB
+    }
+    reverse_proxy flight_web:8000 {
+        header_up -Forwarded
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Host {host}
+    }
+}

@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Flight Alerts subscription</title><link rel="stylesheet" href="/assets/app.css"></head>
+<body><main><h1>Flight Alerts</h1><section>
+{% if completed %}
+<h2>Subscription preference updated</h2><p>{% if purpose == 'confirm' %}Your email address is confirmed. You will receive alerts when delivery is enabled.{% else %}Alerts to this address have been disabled. Pending alerts will not be sent.{% endif %}</p>
+{% else %}
+<h2>{% if purpose == 'confirm' %}Confirm your subscription{% else %}Unsubscribe from alerts{% endif %}</h2>
+<p>{% if purpose == 'confirm' %}Confirm that you want Flight Alerts to send you flight updates.{% else %}Stop all Flight Alerts messages to this address.{% endif %}</p>
+<form method="post" action="/subscriptions/{{ purpose }}"><input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">{% if purpose == 'confirm' %}Confirm subscription{% else %}Unsubscribe{% endif %}</button></form>
+{% endif %}
+</section></main></body></html>

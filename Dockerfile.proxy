@@ -1,0 +1,24 @@
+# Official Go/Alpine manifest digests verified in docker-library/repo-info.
+# Rebuild the fixed Caddy release with a patched Go runtime and x/net dependency.
+FROM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS builder
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org
+WORKDIR /build
+RUN go mod init flight-alerts-proxy \
+    && go get github.com/caddyserver/caddy/v2/cmd/caddy@v2.11.7 golang.org/x/net@v0.60.0 \
+    && go mod verify \
+    && go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/caddy github.com/caddyserver/caddy/v2/cmd/caddy \
+    && go version -m /out/caddy
+
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S -g 10001 flight \
+    && adduser -S -D -H -u 10001 -G flight flight \
+    && mkdir -p /data/caddy /config/caddy /etc/caddy \
+    && chown -R 10001:10001 /data /config \
+    && chmod 0700 /data/caddy /config/caddy
+COPY --from=builder /out/caddy /usr/bin/caddy
+# A freshly built binary has no upstream privileged-port file capability.
+ENV XDG_DATA_HOME=/data XDG_CONFIG_HOME=/config
+USER 10001:10001
+EXPOSE 8080 8443
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

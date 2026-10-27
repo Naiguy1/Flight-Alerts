@@ -1,207 +1,268 @@
-import logging
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-import yaml
-from jinja2 import Template
-from analyzer.evaluator import QualifiedDeal
+"""Verified SMTP delivery and escaped email rendering.
 
-logger = logging.getLogger(__name__)
-
-HTML_EMAIL_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Flight Deal Alert</title>
-</head>
-<body style="margin:0; padding:0; background-color:#f4f6f8; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color:#1c252c;">
-  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f6f8; padding:24px 12px;">
-    <tr>
-      <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px; width:100%; background-color:#ffffff; border-radius:8px; overflow:hidden; border:1px solid #dce1e6;">
-          <tr>
-            <td style="background-color:#0f2942; padding:24px 28px; color:#ffffff;">
-              <div style="font-size:12px; text-transform:uppercase; letter-spacing:1.2px; color:#8ab4f8; font-weight:600;">
-                Flight Deal Alert ({{ deal.offer.origin }})
-              </div>
-              <div style="font-size:26px; font-weight:700; margin-top:6px;">
-                {{ deal.offer.origin }} to {{ deal.offer.destination_city }} ({{ deal.offer.destination }})
-              </div>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:24px 28px; border-bottom:1px solid #eaeeef; background-color:#f8fbff;">
-              <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td width="50%" valign="top">
-                    <div style="font-size:13px; color:#5a6872; font-weight:500;">Found Roundtrip Fare</div>
-                    <div style="font-size:36px; font-weight:800; color:#0b6e4f; margin-top:4px;">
-                      ${{ "%.0f"|format(deal.offer.price_usd) }}
-                    </div>
-                    <div style="font-size:13px; color:#5a6872; margin-top:4px;">
-                      Typical Route Average: <span style="text-decoration:line-through;">${{ "%.0f"|format(deal.average_price_usd) }}</span>
-                    </div>
-                  </td>
-                  <td width="50%" valign="middle" align="right">
-                    <div style="display:inline-block; background-color:#0b6e4f; color:#ffffff; padding:10px 16px; border-radius:6px; font-size:20px; font-weight:700;">
-                      Save {{ "%.1f"|format(deal.discount_percent) }}%
-                    </div>
-                    <div style="font-size:12px; color:#5a6872; margin-top:8px;">
-                      Save ${{ "%.0f"|format(deal.average_price_usd - deal.offer.price_usd) }} off baseline
-                    </div>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:24px 28px;">
-              <table width="100%" cellpadding="8" cellspacing="0" border="0" style="font-size:15px;">
-                <tr>
-                  <td width="38%" style="color:#5a6872; font-weight:600; border-bottom:1px solid #f0f2f4;">Route</td>
-                  <td style="color:#1c252c; border-bottom:1px solid #f0f2f4;">
-                    <strong>{{ deal.offer.origin }}</strong> &rarr; <strong>{{ deal.offer.destination }}</strong> ({{ deal.offer.destination_city }}{% if deal.offer.country_code %}, {{ deal.offer.country_code }}{% endif %})
-                  </td>
-                </tr>
-                <tr>
-                  <td style="color:#5a6872; font-weight:600; border-bottom:1px solid #f0f2f4;">Dates</td>
-                  <td style="color:#1c252c; border-bottom:1px solid #f0f2f4;">
-                    {{ deal.offer.outbound_date }} to {{ deal.offer.return_date }} ({{ deal.offer.trip_duration_days }} days)
-                  </td>
-                </tr>
-                <tr>
-                  <td style="color:#5a6872; font-weight:600; border-bottom:1px solid #f0f2f4;">Airline(s)</td>
-                  <td style="color:#1c252c; border-bottom:1px solid #f0f2f4;">
-                    {{ deal.offer.airlines | join(", ") }}
-                  </td>
-                </tr>
-                <tr>
-                  <td style="color:#5a6872; font-weight:600; border-bottom:1px solid #f0f2f4;">Layovers</td>
-                  <td style="color:#1c252c; border-bottom:1px solid #f0f2f4;">
-                    {% if deal.offer.layovers == 0 %}Nonstop{% elif deal.offer.layovers == 1 %}1 Layover{% else %}{{ deal.offer.layovers }} Layovers{% endif %}
-                  </td>
-                </tr>
-                <tr>
-                  <td style="color:#5a6872; font-weight:600;">Data Source</td>
-                  <td style="color:#1c252c;">
-                    {{ deal.offer.source }} (Baseline: {{ deal.baseline_source }})
-                  </td>
-                </tr>
-              </table>
-              <div style="text-align:center; margin-top:28px; margin-bottom:8px;">
-                <a href="{{ deal.offer.booking_url }}" target="_blank" rel="noopener noreferrer"
-                   style="background-color:#1a73e8; color:#ffffff; text-decoration:none; padding:14px 28px; border-radius:6px; font-weight:700; font-size:16px; display:inline-block;">
-                  View &amp; Book Flight
-                </a>
-              </div>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
+Recipients are passed explicitly by the durable delivery service. No recipient is
+read from YAML or an environment fallback, so an empty subscription list stays
+empty. SMTP acknowledgment can be ambiguous after a network failure; delivery
+therefore follows the outbox's documented at-least-once semantics.
 """
+from __future__ import annotations
+
+import html
+import math
+import re
+import smtplib
+import ssl
+from datetime import date
+from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
+from typing import Any
+from urllib.parse import urlencode, urlsplit
+
+from fetcher.base import sanitize_booking_url
+
+_LOCAL_CHARACTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+/=?^_`{|}~-")
+_DOMAIN_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z")
+_MAX_BODY = 1_000_000
+
+
+class DeliveryError(Exception):
+    """Safe error category suitable for persistence and operator dashboards."""
+    def __init__(self, category: str, retryable: bool = True):
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", category):
+            category = "delivery_failed"
+        self.category = category
+        self.retryable = bool(retryable)
+        super().__init__(category)
+
+
+def normalize_email(address: str) -> str:
+    """Accept one ASCII mailbox (IDNA domain permitted), never header syntax."""
+    if not isinstance(address, str) or len(address) > 254 or any(ord(c) < 32 or ord(c) == 127 for c in address):
+        raise ValueError("Invalid email address")
+    address = address.strip()
+    if address.count("@") != 1:
+        raise ValueError("Invalid email address")
+    local, domain = address.rsplit("@", 1)
+    try:
+        domain = domain.encode("idna").decode("ascii").lower()
+    except UnicodeError as exc:
+        raise ValueError("Invalid email address") from exc
+    labels = domain.split(".")
+    local_parts = local.split(".")
+    valid_local = all(part and all(char in _LOCAL_CHARACTERS for char in part) for part in local_parts)
+    if (not 0 < len(local) <= 64 or not valid_local
+            or len(labels) < 2 or len(domain) > 253
+            or any(not _DOMAIN_LABEL.fullmatch(label) for label in labels)
+            or len(local) + len(domain) + 1 > 254):
+        raise ValueError("Invalid email address")
+    return local.lower() + "@" + domain
+
+
+def _https_url(url: str, *, booking: bool = False) -> str:
+    if booking:
+        clean = sanitize_booking_url(url)
+        if not clean:
+            raise ValueError("Invalid HTTPS URL")
+        return clean
+    if not isinstance(url, str) or len(url) > 4096 or any(ord(c) <= 32 or ord(c) == 127 for c in url):
+        raise ValueError("Invalid HTTPS URL")
+    try:
+        parsed = urlsplit(url)
+        if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
+                or parsed.password is not None
+                or (parsed.port is not None and not 1 <= parsed.port <= 65535) or parsed.fragment):
+            raise ValueError("Invalid HTTPS URL")
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError("Invalid HTTPS URL") from exc
+    return url
+
+
+def _text(value: Any, max_length: int = 500) -> str:
+    raw = str(value if value is not None else "")
+    if len(raw) > max_length or any(ord(c) < 32 or ord(c) == 127 for c in raw):
+        raise ValueError("Invalid message field")
+    return raw
+
+
+def _positive(value: Any) -> float:
+    if isinstance(value, bool):
+        raise ValueError("Invalid fare")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0 or number > 1_000_000:
+        raise ValueError("Invalid fare")
+    return number
+
+
+def render_message(title: str, body_html: str, unsubscribe_url: str | None = None) -> str:
+    footer = ""
+    if unsubscribe_url is not None:
+        footer = '<p><a href="' + html.escape(_https_url(unsubscribe_url), quote=True) + '">Unsubscribe from alerts</a></p>'
+    # body_html must consist exclusively of markup built by the escaped helpers
+    # in this module; do not pass arbitrary caller or provider HTML here.
+    return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>'
+            + html.escape(_text(title, 200)) + '</title></head><body>'
+            + '<main style="max-width:640px;margin:auto;font-family:Arial,sans-serif">'
+            + '<h1>' + html.escape(title) + '</h1>' + body_html + footer + '</main></body></html>')
+
+
+def render_deal(payload: dict) -> tuple[str, str, str]:
+    offer = payload.get("offer")
+    if not isinstance(offer, dict):
+        raise ValueError("Invalid deal payload")
+    origin = _text(offer.get("origin"), 3)
+    destination = _text(offer.get("destination"), 3)
+    if not re.fullmatch(r"[A-Z]{3}", origin) or not re.fullmatch(r"[A-Z]{3}", destination):
+        raise ValueError("Invalid route")
+    if offer.get("currency", "USD") != "USD":
+        raise ValueError("Unsupported fare currency")
+    price, average = _positive(offer["price_usd"]), _positive(payload["average_price_usd"])
+    discount = float(payload["discount_percent"])
+    if not math.isfinite(discount) or not 0 <= discount <= 100:
+        raise ValueError("Invalid discount")
+    expected_discount = (average - price) / average * 100
+    if not math.isclose(discount, expected_discount, rel_tol=1e-8, abs_tol=1e-6):
+        raise ValueError("Discount does not match the fare and baseline")
+    city = _text(offer.get("destination_city", destination), 100)
+    outbound = _text(offer.get("outbound_date"), 10)
+    returning = _text(offer.get("return_date"), 10)
+    if date.fromisoformat(returning) <= date.fromisoformat(outbound):
+        raise ValueError("Invalid travel dates")
+    raw_url = offer.get("booking_url")
+    if raw_url is None or raw_url == "":
+        raw_url = "https://www.google.com/travel/flights?" + urlencode({
+            "q": f"Flights from {origin} to {destination} on {outbound} through {returning}", "curr": "USD",
+        })
+    booking = _https_url(raw_url, booking=True)
+    airlines = offer.get("airlines", [])
+    if not isinstance(airlines, list) or len(airlines) > 20:
+        raise ValueError("Invalid airline list")
+    airline_names = ", ".join(_text(a, 100) for a in airlines) or "See booking provider"
+    source = _text(offer.get("source", "Provider"), 100)
+    baseline_source = _text(payload.get("baseline_source", "Configured baseline"), 200)
+    observed = _text(offer.get("observed_at", "See alert discovery time"), 100)
+    scope = "outbound details" if offer.get("metadata_scope", "outbound") == "outbound" else "roundtrip details"
+    stops = offer.get("layovers", 0)
+    if type(stops) is not int or not 0 <= stops <= 20:
+        raise ValueError("Invalid stop count")
+    subject = f"[Flight deal] {origin} to {destination}: ${price:.0f} ({discount:.0f}% below baseline)"
+    plain = (
+        f"{origin} to {city} ({destination})\nRoundtrip search fare: ${price:.2f} USD\n"
+        f"Baseline: ${average:.2f} USD ({baseline_source}); difference: {discount:.1f}%\n"
+        f"Travel dates: {outbound} to {returning}\nAirlines ({scope}): {airline_names}\n"
+        f"Layovers ({scope}): {stops}\nSource: {source}\nObserved: {observed}\n"
+        f"Fare availability and conditions can change. Recheck with the provider.\nBook: {booking}\n"
+    )
+    def cell(label: str, value: str) -> str:
+        return '<tr><th style="text-align:left">' + html.escape(label) + '</th><td>' + html.escape(value) + '</td></tr>'
+    card = '<section><h2>' + html.escape(f"{origin} → {city} ({destination})") + '</h2><table>'
+    for label, value in (
+        ("Roundtrip search fare", f"${price:.2f} USD"),
+        ("Baseline", f"${average:.2f} USD · {baseline_source}"),
+        ("Below baseline", f"{discount:.1f}%"),
+        ("Travel dates", f"{outbound} to {returning}"),
+        (f"Airlines ({scope})", airline_names),
+        (f"Layovers ({scope})", str(stops)), ("Source", source), ("Observed", observed),
+    ):
+        card += cell(label, value)
+    card += ('</table><p>Fare availability and conditions can change. Recheck with the provider.</p>'
+             '<p><a href="' + html.escape(booking, quote=True) + '">View fare with provider</a></p></section>')
+    return subject, plain, card
+
+
+def render_status(payload: dict) -> tuple[str, str, str]:
+    flight = _text(payload.get("flight_iata"), 10)
+    if not re.fullmatch(r"[A-Z0-9]{2,3}[0-9]{1,4}[A-Z]?", flight):
+        raise ValueError("Invalid flight identifier")
+    travel_date = _text(payload.get("flight_date"), 10)
+    date.fromisoformat(travel_date)
+    current = payload.get("current")
+    if not isinstance(current, dict):
+        raise ValueError("Invalid status payload")
+    subject = f"[Flight status] {flight} on {travel_date}"
+    def available(value):
+        return "Not available" if value is None or value == "" else value
+
+    timestamp_label = "Provider update" if current.get("timestamp_source") == "provider" else "Last checked"
+    labels = (
+        ("Status", current.get("status", "Unknown")),
+        ("Reported delay (minutes)", available(current.get("delay_minutes"))),
+        ("Departure gate", available(current.get("departure_gate"))),
+        ("Arrival gate", available(current.get("arrival_gate"))),
+        (timestamp_label, available(current.get("updated_at"))),
+    )
+    plain = f"{flight} on {travel_date}\n" + "\n".join(label + ": " + _text(value) for label, value in labels)
+    card = '<p>' + html.escape(f"{flight} on {travel_date}") + '</p><dl>'
+    for label, value in labels:
+        card += '<dt>' + html.escape(label) + '</dt><dd>' + html.escape(_text(value)) + '</dd>'
+    return subject, plain + "\nCheck the airline for the latest operational information.\n", card + '</dl><p>Check the airline for the latest operational information.</p>'
 
 
 class EmailNotifier:
     def __init__(
-        self,
-        smtp_host: str,
-        smtp_port: int,
-        smtp_username: str,
-        smtp_password: str,
-        sender_email: str,
-        recipient_email: str,
-        config_path: str = "/app/config.yaml",
+        self, smtp_host: str, smtp_port: int, smtp_username: str, smtp_password: str,
+        sender_email: str, recipient_email: str = "", config_path: str | None = None,
+        *, timeout: float = 20,
     ):
         self.smtp_host = smtp_host
-        self.smtp_port = smtp_port
+        self.smtp_port = int(smtp_port)
         self.smtp_username = smtp_username
-        self.smtp_password = smtp_password
-        self.sender_email = sender_email
-        self.config_path = config_path
-        self.fallback_recipient = recipient_email
-        self.template = Template(HTML_EMAIL_TEMPLATE)
+        self._smtp_password = smtp_password
+        self.sender_email = normalize_email(sender_email) if sender_email else ""
+        self.timeout = float(timeout)
+        if not 1 <= self.timeout <= 60 or not 1 <= self.smtp_port <= 65535:
+            raise ValueError("Invalid SMTP configuration")
+        if bool(smtp_username) != bool(smtp_password):
+            raise ValueError("SMTP username and password must both be configured")
+        # Compatibility constructor arguments are deliberately not a recipient
+        # source. Only verified DB subscriptions authorize notification delivery.
+        del recipient_email, config_path
 
-    def _get_recipients(self) -> list[str]:
-        """Reads recipient_emails from config.yaml, falling back to .env if not set."""
+    def send_message(
+        self, recipient: str, subject: str, plain_body: str, html_body: str,
+        unsubscribe_url: str | None = None,
+    ) -> None:
+        recipient = normalize_email(recipient)
+        subject = _text(subject, 200)
+        if not self.smtp_host or not self.sender_email:
+            raise DeliveryError("smtp_not_configured", retryable=False)
+        if not isinstance(plain_body, str) or not isinstance(html_body, str) or len(plain_body) + len(html_body) > _MAX_BODY:
+            raise DeliveryError("message_too_large", retryable=False)
+        message = EmailMessage()
+        message["From"] = self.sender_email
+        message["To"] = recipient
+        message["Subject"] = subject
+        message["Date"] = formatdate(localtime=False, usegmt=True)
+        message["Message-ID"] = make_msgid(domain=self.sender_email.rsplit("@", 1)[1])
+        if unsubscribe_url:
+            message["List-Unsubscribe"] = "<" + _https_url(unsubscribe_url) + ">"
+        message.set_content(plain_body)
+        message.add_alternative(html_body, subtype="html")
+        context = ssl.create_default_context()
         try:
-            with open(self.config_path, "r", encoding="utf-8") as fh:
-                cfg = yaml.safe_load(fh) or {}
-                filters = cfg.get("filters") or {}
-                if "recipient_emails" in filters and isinstance(filters["recipient_emails"], list):
-                    cleaned = []
-                    for item in filters["recipient_emails"]:
-                        for part in str(item).split(","):
-                            addr = part.strip()
-                            if addr and addr.lower() not in [c.lower() for c in cleaned]:
-                                cleaned.append(addr)
-                    if cleaned:
-                        return cleaned
-        except Exception as exc:
-            logger.warning("Could not read recipients from config.yaml: %s", exc)
-        return [r.strip() for r in self.fallback_recipient.split(",") if r.strip()]
-
-    def send_deal_alert(self, deal: QualifiedDeal) -> bool:
-        recipients = self._get_recipients()
-        if not recipients:
-            logger.warning("No recipient emails configured; skipping email alert.")
-            return False
-
-        offer = deal.offer
-        subject = (
-            f"[Deal Alert] {offer.origin} to {offer.destination_city} ({offer.destination}) - "
-            f"${offer.price_usd:.0f} RT ({deal.discount_percent:.0f}% Off)"
-        )
-        plain_body = self.build_plain_text(deal)
-        html_body = self.build_html(deal)
-
-        sent_count = 0
-        try:
-            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=20) as server:
+            if self.smtp_port == 465:
+                connection = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, timeout=self.timeout, context=context)
+            else:
+                connection = smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=self.timeout)
+            with connection as server:
                 server.ehlo()
-                server.starttls()
-                server.ehlo()
-                if self.smtp_username and self.smtp_password:
-                    server.login(self.smtp_username, self.smtp_password)
-
-                # Send an individual email to each recipient so no one sees anyone else's address
-                for recipient in recipients:
-                    msg = MIMEMultipart("alternative")
-                    msg["Subject"] = subject
-                    msg["From"] = self.sender_email
-                    msg["To"] = recipient
-                    msg.attach(MIMEText(plain_body, "plain", "utf-8"))
-                    msg.attach(MIMEText(html_body, "html", "utf-8"))
-
-                    try:
-                        server.sendmail(self.sender_email, [recipient], msg.as_string())
-                        sent_count += 1
-                        logger.info(
-                            "Delivered private alert email for %s->%s to %s",
-                            offer.origin, offer.destination, recipient,
-                        )
-                    except Exception as recipient_exc:
-                        logger.error("Failed delivering to %s: %s", recipient, recipient_exc)
-
-            return sent_count > 0
-        except Exception as exc:
-            logger.error("SMTP connection failed for %s->%s: %s", offer.origin, offer.destination, exc)
-            return False
-
-    def build_html(self, deal: QualifiedDeal) -> str:
-        return self.template.render(deal=deal)
-
-    def build_plain_text(self, deal: QualifiedDeal) -> str:
-        offer = deal.offer
-        return (
-            f"FLIGHT DEAL ALERT: {offer.origin} -> {offer.destination_city} ({offer.destination})\n"
-            f"Found Price: ${offer.price_usd:.0f} (Typical Avg: ${deal.average_price_usd:.0f} | Save {deal.discount_percent:.1f}%)\n"
-            f"Dates: {offer.outbound_date} to {offer.return_date} ({offer.trip_duration_days} days)\n"
-            f"Airlines: {', '.join(offer.airlines)} | Layovers: {offer.layovers}\n"
-            f"Book / View Itinerary: {offer.booking_url}\n"
-        )
+                if self.smtp_port != 465:
+                    server.starttls(context=context)
+                    server.ehlo()
+                if self.smtp_username:
+                    server.login(self.smtp_username, self._smtp_password)
+                refused = server.send_message(message, from_addr=self.sender_email, to_addrs=[recipient])
+                if refused:
+                    raise DeliveryError("recipient_refused", retryable=False)
+        except ssl.SSLError:
+            raise DeliveryError("smtp_tls_failed", retryable=False) from None
+        except smtplib.SMTPAuthenticationError:
+            raise DeliveryError("smtp_authentication_failed", retryable=False) from None
+        except smtplib.SMTPRecipientsRefused as exc:
+            transient = any(400 <= int(code) < 500 for code, _ in exc.recipients.values())
+            raise DeliveryError("recipient_refused", retryable=transient) from None
+        except smtplib.SMTPResponseException as exc:
+            raise DeliveryError("smtp_rejected", retryable=400 <= exc.smtp_code < 500) from None
+        except (smtplib.SMTPException, OSError):
+            # The server may already have accepted DATA. The durable worker may
+            # retry; duplicates remain possible under documented at-least-once semantics.
+            raise DeliveryError("smtp_network_failed", retryable=True) from None
