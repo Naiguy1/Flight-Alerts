@@ -26,6 +26,13 @@ pins the fixed proxy router. The remaining module-level OpenPGP advisory needs
 the [scoped package-applicability review](supply-chain.md#follow-up-finding-review-2026-10-27)
 and the CI proof that affected packages are absent.
 
+Reviewed implementation `dd2069cac8d8a0efc8aeca945787afd90102a82f` now also retries
+transient WAL initialization locks before migrations. Its locked CI suite passes
+264 tests with zero skips; the final application scan has zero vulnerabilities
+at every severity. The release record links the exact CI, SBOM and proxy
+applicability evidence. Follow-up PR #7 remains a draft for independent review
+and the remaining repository/operator gates.
+
 Release remains blocked on an eligible independent reviewer, applying/verifying
 the supplied branch protection, and the deployment operator's production-data
 restore rehearsal and host/service/staging evidence. Repository access alone

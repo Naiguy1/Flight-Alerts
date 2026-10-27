@@ -39,76 +39,79 @@ limits growth. See the architecture runbook for single-host/SMTP limitations.
 
 ## Release record
 
-### Repository verification, 2026-10-27
+### Verified implementation candidate, 2026-10-27
 
-**Decision: hold production release pending the follow-up review and operator
-gates below.** CI success alone does not authorize public deployment.
+**Decision: automated code gates passed; production release remains on hold for
+independent approval, repository protection and operator sign-off.**
 
-The initial hardening change was merged through
-[PR #1](https://github.com/Naiguy1/Flight-Alerts/pull/1). The verified merged SHA is
-`3c5b9e16bb89c3906b053bbab2a5d468303f2c8a`:
+Reviewed implementation SHA: `dd2069cac8d8a0efc8aeca945787afd90102a82f`, delivered
+in [PR #7](https://github.com/Naiguy1/Flight-Alerts/pull/7) from
+`production-hardening` to `main`. The initial hardening PR #1 already merged at
+`3c5b9e16bb89c3906b053bbab2a5d468303f2c8a`. The follow-up fixes notification expiry
+and confirmation checks after SMTP waits, explicit digest pruning, the SQLite
+WAL initialization race, vulnerable runtime installers and the proxy router.
 
-| Evidence | Result |
+| Gate / evidence | Reviewed result on the implementation SHA |
 |---|---|
-| [Tests / Security / Image](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40599887085) | All passed; 249 tests, zero failures/errors, zero skips; locked HTTP integration tests executed; isolated backup/restore passed |
-| [Package and secret diagnostics](https://github.com/Naiguy1/Flight-Alerts/runs/122525288738) | Production and optional scraper audits found no known package vulnerabilities; full-history secret scan passed |
-| [Application/proxy diagnostics](https://github.com/Naiguy1/Flight-Alerts/runs/122526224211) | Neither image had a release-blocking finding; image-sbom artifact was generated |
-| [CodeQL](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40599887083) | Passed; no unsuppressed high/critical finding |
-| Independent approval on PR #1 | No approving review recorded; automated comment does not satisfy independent approval |
-| Main branch protection | `protected=false` when inspected; required policy has not been applied |
+| [Tests](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40603396990) / [test diagnostics](https://github.com/Naiguy1/Flight-Alerts/runs/122536992375) | 264 tests passed, zero failures/errors, zero skips; locked HTTP integration coverage, dependency consistency and isolated backup/restore executed |
+| [Security diagnostics](https://github.com/Naiguy1/Flight-Alerts/runs/122537049748) | No known production or optional scraper package vulnerabilities; full-history secret scan passed |
+| [Application / proxy image and SBOM evidence](https://github.com/Naiguy1/Flight-Alerts/runs/122537784879) | Application: zero vulnerabilities at every severity. Proxy: zero low/medium/high/critical findings; one UNKNOWN module-level advisory retained and assessed below |
+| [CodeQL](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40603396980) | Passed; no unsuppressed high/critical finding |
+| Additional local recovery checks | 144 notification/database/configuration/operations tests passed; actual eight-way initialization passed 25 repetitions; deterministic WAL tests cover transient locks, bounded exhaustion and immediate rejection of unrelated errors |
 
-The follow-up candidate corrects expiry checks after revalidation/SMTP pacing
-and suppresses an invitation confirmed while waiting. Image diagnostics now
-include the SBOM package/version inventory, its SHA256, and every severity count.
-Review the follow-up's exact SHA and checks separately; the baseline results in
-this table do not validate new commits. Local tests used available dependencies;
-locked installation was unavailable in the editing environment. CI is required
-to execute the complete locked suite without skips.
+The reviewed CycloneDX 1.7 inventory contains 62 distinct package/version entries.
+Its SHA256 is
+`5e71363393dc6086e231ae2346fa23982b226d3f8033117f9815a747bf972a5e`.
+The complete inventory is visible in the linked diagnostic and downloadable as
+`image-sbom` on the CI run. All application distributions match their exact lock;
+both entire unused installer distributions are absent from the final image.
 
-Follow-up [PR #7](https://github.com/Naiguy1/Flight-Alerts/pull/7), implementation
-SHA `b7c111e580e39e3298fbb34e3d092c72bbb8ac9b`, passed
-[CI](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40601322955) with 260 tests
-and no skips, and [CodeQL](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40601322959).
-The [expanded image report](https://github.com/Naiguy1/Flight-Alerts/runs/122530735740)
-showed no high/critical findings, but exposed old installer/router versions and
-GO-2026-5932. This SHA is superseded by remediation on the same PR; do not release
-it based on its green severity gate. The [specific finding review](supply-chain.md#follow-up-finding-review-2026-10-27)
-records fixes for every available patch and the evidence required to assess the
-remaining OpenPGP-only advisory. Rerun all four gates on the remediation commit.
+The remaining scanner observation is GO-2026-5932 for `golang.org/x/crypto`.
+The [specific advisory review](supply-chain.md#follow-up-finding-review-2026-10-27)
+limits the not-affected assessment to its deprecated OpenPGP packages. CI found
+none of those packages in the static proxy's 1029 build dependencies. The graph
+SHA256 is `69f4947107ce0367d3916c81855a5d60239123b7d94d10f0ef3eb82dd3c462b8`.
+The module-level finding remains visible, and the independent approver must
+review the assessment. No scanner suppression or severity downgrade was adopted.
 
-The intermediate remediation SHA `8dc5b2b3efca2426e89f3196990809a7663d4ed9`
-passed 262 tests with no skips, package/secret audits and CodeQL, but its
-[image gate failed](https://github.com/Naiguy1/Flight-Alerts/runs/122533991245)
-on vulnerable libraries bundled in the newer installer. This candidate is also
-superseded. Both unused installer distributions are removed from the shipped
-image; build-time dependency checking, final locked distribution inventory and
-full image scanning remain mandatory. The same report confirmed the router fix
-and absence of affected OpenPGP packages from 1029 proxy build dependencies.
+Documentation-only evidence updates after the implementation SHA must also pass
+the four required checks on their final PR head. The review record in PR #7
+identifies that final head. After merging, wait for the resulting main SHA's
+checks and rebuild from it; CI image inventory is not a deployed image digest.
 
-An administrator must arrange an eligible reviewer and use
-`python -m tools.apply_branch_protection --repository Naiguy1/Flight-Alerts --apply`,
-then run the same command without `--apply` to verify. This requires a privately
-configured administration token; the repository connector has no administration
-write operation. Keep the one-reviewer policy unless the maintainer deliberately
-documents a different review policy. No bypass or policy exception was adopted.
+### Outstanding repository and deployment gates
 
-### Deployment sign-off (operator must complete)
+No approving independent review was recorded on the original hardening PR.
+`main` had `protected=false` and no repository rulesets when inspected. An
+administrator must arrange an eligible reviewer, then apply and verify the
+supplied policy:
 
-No production database, prior image, host credentials or external-service
-verification were provided for this review. The following fields are pending;
-synthetic migration/recovery tests do not complete these requirements. Record
-non-sensitive results and evidence locations here; keep backups/settings/secrets
-private.
+```bash
+python -m tools.apply_branch_protection --repository Naiguy1/Flight-Alerts --apply
+python -m tools.apply_branch_protection --repository Naiguy1/Flight-Alerts
+```
 
-- Deployed Git SHA / image digest:
-- CI and security scan URLs:
-- External TLS / firewall / auth verification:
-- Host and backup encryption verification:
-- Production backup restoration drill:
-- Provider entitlement / quota verification:
-- Controlled verified-recipient delivery:
-- GitHub branch-protection verification:
-- Monitoring and rollback owner:
-- Eligible independent reviewer / approved candidate SHA / approval link:
+These commands require a privately configured administration token. The repository
+connector has no administration write operation. Keep the supplied one-reviewer
+policy unless the maintainer deliberately documents a different review policy;
+no bypass or review-policy exception was adopted.
+
+No production database, prior image, host access or external-service verification
+was supplied. The operator must complete the actual production-backup migration
+and rollback rehearsal, encrypted storage/backups, DNS/TLS/firewall and subnet
+checks, private secret provisioning/rotation, provider entitlements/quotas,
+monitoring/retention, private staging and controlled confirmed-recipient delivery.
+Synthetic tests do not complete those gates. Record non-sensitive evidence below
+and keep settings, secrets and backups private.
+
+- Deployed Git SHA / application and proxy image digests:
 - Final merged SHA / Tests, Security, Image, CodeQL URLs:
-- Application and proxy image findings / SBOM checksum and review:
+- Eligible independent reviewer / approved candidate SHA / approval link:
+- Application and proxy findings / deployed SBOM checksum and review:
+- External TLS / firewall / auth / CSRF verification:
+- Host, certificate-volume and off-host backup encryption verification:
+- Production backup migration / restoration / prior-image rollback rehearsal:
+- Provider entitlement / data rights / quota verification:
+- Controlled confirmed-recipient delivery / quiet-hour and digest verification:
+- GitHub branch-protection verification:
+- Monitoring, retention, observation period and rollback owner:
