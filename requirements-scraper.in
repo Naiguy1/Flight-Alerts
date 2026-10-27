@@ -1,0 +1,2 @@
+-r requirements.in
+fast-flights>=3.1,<4

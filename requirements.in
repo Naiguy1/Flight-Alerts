@@ -1,0 +1,9 @@
+# Supported deployment target: CPython 3.12, Linux amd64.
+# requirements.txt contains the resolved, hash-verified production environment.
+fastapi>=0.111,<1
+Jinja2>=3.1.6,<4
+PyYAML>=6.0.2,<7
+python-dotenv>=1.1,<2
+python-multipart>=0.0.20,<1
+requests>=2.32.4,<3
+uvicorn>=0.34,<1
