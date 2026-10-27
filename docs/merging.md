@@ -105,7 +105,7 @@ verification in `production-readiness.md`.
 ## If a check fails or rollback is needed
 
 A failed check means the branch is not ready to release. Inspect the workflow and
-bounded `Validation report: Tests`, `Security`, or `Image` check output. Missing
+bounded `Validation report: Tests`, `Security`, `Image`, or `CodeQL` check output. Missing
 scanner/test reports are failures, not evidence of safety. Fix the issue on
 `production-hardening`, push a normal commit, and rerun all required gates.
 

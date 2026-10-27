@@ -142,6 +142,8 @@ jobs:
             -e PUBLIC_HOST=alerts.example.invalid -e ACME_EMAIL=admin@example.invalid \
             -v "$PWD/docs/Caddyfile:/etc/caddy/Caddyfile:ro" \
             flight-alerts-proxy:ci caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Verify private request data stays out of proxy outage logs
+        run: python3 -m tools.test_proxy_privacy
       - name: Scan release-blocking image vulnerabilities
         uses: aquasecurity/trivy-action@8f28faec26515256b6d22074d1d2a8986f4cbd87
         with:

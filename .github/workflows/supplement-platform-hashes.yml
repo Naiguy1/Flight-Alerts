@@ -1,11 +1,6 @@
 name: Supplement platform wheel hashes
 on:
   workflow_dispatch:
-  push:
-    branches: [production-hardening]
-    paths:
-      - tools/add_platform_hashes.py
-      - .github/workflows/supplement-platform-hashes.yml
 permissions:
   contents: read
 jobs:

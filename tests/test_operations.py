@@ -215,5 +215,20 @@ class SupplyChainTests(unittest.TestCase):
         self.assertEqual(codeql_findings(report), [])
 
 
+    def test_codeql_extension_rules_are_resolved_and_unknown_rules_fail_closed(self):
+        report = {"version": "2.1.0", "runs": [{"tool": {"driver": {"rules": []}, "extensions": [{"rules": [{
+            "id": "py/extension", "properties": {"security-severity": "8.1"},
+        }]}]}, "results": [{"ruleId": "py/extension", "locations": [{"physicalLocation": {
+            "artifactLocation": {"uri": "dashboard.py"}, "region": {"startLine": 42},
+        }}]}]}]}
+        result = codeql_findings(report)
+        self.assertEqual(len(result), 1)
+        self.assertIn("dashboard.py:42", result[0])
+        report["runs"][0]["results"] = [{"rule": {"index": 0, "toolComponent": {"index": 0}}}]
+        self.assertIn("py/extension", codeql_findings(report)[0])
+        report["runs"][0]["results"] = [{"ruleId": "py/missing"}]
+        self.assertIn("failed closed", codeql_findings(report)[0])
+
+
 if __name__ == "__main__":
     unittest.main()
