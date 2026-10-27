@@ -1,3 +1,4 @@
+# Public bootstrap defaults. Mutable settings and verified recipients live in SQLite.
 scanner:
   origins:
   - SLC
@@ -15,6 +16,11 @@ scanner:
     - 165
     trip_duration_days: 7
   currency: USD
+  provider_requests_per_minute: 10
+  provider_daily_budget: 1000
+  concurrency: 3
+  request_timeout_seconds: 20
+  scan_deadline_seconds: 7200
 filters:
   discount_threshold_percent: 50.0
   deduplication_window_hours: 48
@@ -33,8 +39,15 @@ filters:
   - STT
   - HNL
   blocked_destinations: []
-  recipient_emails:
-  - naibowerbank@gmail.com
+  recipient_emails: []
+  alerts_paused: false
+  price_improvement_usd: 35
+  price_improvement_percent: 10
+  freshness_hours: 24
+  retention_days: 180
+  digest_enabled: false
+  digest_interval_hours: 6
+  quiet_hours: null
 monitored_destinations:
 - code: YYZ
   city: Toronto

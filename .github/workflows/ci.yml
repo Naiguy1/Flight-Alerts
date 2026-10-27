@@ -1,0 +1,190 @@
+name: CI
+on:
+  push:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 7 * * 1'
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  tests:
+    name: Tests
+    permissions:
+      contents: read
+      checks: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Verify lock and supply-chain pins
+        run: python -m tools.verify_lock
+      - name: Install locked test environment
+        run: python -m pip install --require-hashes -r requirements-dev.txt
+      - name: Validate Python and code quality
+        run: |
+          python -m compileall -q analyzer db fetcher notifier services tools web dashboard.py main.py settings.py
+          python -m ruff check --output-format github .
+      - name: Run security, integration, and recovery regression tests
+        run: python -m pytest -q --junitxml=test-results.xml
+      - name: Publish bounded synthetic test diagnostics
+        if: always()
+        run: python -m tools.ci_test_report
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: test-results
+          path: test-results.xml
+          retention-days: 7
+      - name: Exercise an isolated backup and restore
+        run: python -m tools.backup self-test
+      - name: Check dependency consistency
+        run: python -m pip check
+      - name: Publish connector-readable validation diagnostics
+        if: always() && github.event_name != 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GATE_RESULT: ${{ job.status }}
+        run: python -m tools.publish_validation_report Tests
+  security:
+    name: Security
+    permissions:
+      contents: read
+      checks: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --require-hashes -r requirements-dev.txt
+      - name: Audit actual pinned production packages
+        run: |
+          python -m pip_audit --require-hashes -r requirements.txt --format json --output pip-audit.json || audit_status=$?
+          test -f pip-audit.json
+          python -m tools.ci_security_report pip-audit pip-audit.json
+          test "${audit_status:-0}" -eq 0
+      - name: Audit locked optional scraper environment
+        if: always()
+        run: |
+          python -m pip_audit --require-hashes -r requirements-scraper.txt --format json --output pip-audit-scraper.json || audit_status=$?
+          test -f pip-audit-scraper.json
+          python -m tools.ci_security_report pip-audit pip-audit-scraper.json
+          test "${audit_status:-0}" -eq 0
+      - name: Scan complete Git history for secrets
+        if: always()
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_VERSION: '8.30.1'
+          GITLEAKS_ENABLE_COMMENTS: 'false'
+      - name: Publish connector-readable validation diagnostics
+        if: always() && github.event_name != 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GATE_RESULT: ${{ job.status }}
+        run: python -m tools.publish_validation_report Security
+  image:
+    name: Image
+    permissions:
+      contents: read
+      checks: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build immutable application image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          load: true
+          tags: flight-alerts:ci
+          push: false
+          platforms: linux/amd64
+      - name: Inspect image permissions, installed dependencies, and excluded files
+        run: |
+          test "$(docker image inspect --format '{{.Config.User}}' flight-alerts:ci)" = '10001:10001'
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -m pip check
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts:ci python -c "from pathlib import Path; assert not any(Path('/app').glob('.env*')); assert not Path('/app/.git').exists()"
+      - name: Build hardened HTTPS proxy
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.proxy
+          load: true
+          tags: flight-alerts-proxy:ci
+          push: false
+          platforms: linux/amd64
+      - name: Validate proxy under actual capability and filesystem restrictions
+        run: |
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges flight-alerts-proxy:ci caddy version
+          docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /data:rw,noexec,nosuid,size=16m,uid=10001,gid=10001,mode=0700 \
+            --tmpfs /config:rw,noexec,nosuid,size=16m,uid=10001,gid=10001,mode=0700 \
+            -e PUBLIC_HOST=alerts.example.invalid -e ACME_EMAIL=admin@example.invalid \
+            -v "$PWD/docs/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            flight-alerts-proxy:ci caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Scan release-blocking image vulnerabilities
+        uses: aquasecurity/trivy-action@8f28faec26515256b6d22074d1d2a8986f4cbd87
+        with:
+          image-ref: flight-alerts:ci
+          version: v0.76.1
+          format: json
+          output: trivy-results.json
+          exit-code: '0'
+          severity: HIGH,CRITICAL
+          scanners: vuln,secret
+          ignore-unfixed: false
+      - name: Enforce image release gate with safe annotations
+        run: python3 -m tools.ci_security_report trivy trivy-results.json
+      - name: Scan hardened proxy image
+        if: always()
+        uses: aquasecurity/trivy-action@8f28faec26515256b6d22074d1d2a8986f4cbd87
+        with:
+          image-ref: flight-alerts-proxy:ci
+          version: v0.76.1
+          format: json
+          output: trivy-proxy-results.json
+          exit-code: '0'
+          severity: HIGH,CRITICAL
+          scanners: vuln,secret
+          ignore-unfixed: false
+      - name: Enforce proxy image release gate
+        if: always()
+        run: python3 -m tools.ci_security_report trivy trivy-proxy-results.json
+      - name: Generate image SBOM
+        if: always()
+        uses: aquasecurity/trivy-action@8f28faec26515256b6d22074d1d2a8986f4cbd87
+        with:
+          image-ref: flight-alerts:ci
+          version: v0.76.1
+          format: cyclonedx
+          output: sbom.cdx.json
+          scanners: vuln
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-sbom
+          path: sbom.cdx.json
+          retention-days: 30
+      - name: Publish connector-readable validation diagnostics
+        if: always() && github.event_name != 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GATE_RESULT: ${{ job.status }}
+        run: python3 -m tools.publish_validation_report Image

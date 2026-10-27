@@ -1,0 +1,10 @@
+# Official Caddy manifest verified in docker-library/repo-info on 2026-10-27.
+FROM caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
+
+# The proxy binds ports 8080/8443. Its upstream file capability is unnecessary
+# and can prevent execution under an empty capability bounding set.
+RUN setcap -r /usr/bin/caddy \
+    && mkdir -p /data/caddy /config/caddy \
+    && chown -R 10001:10001 /data/caddy /config/caddy \
+    && chmod 0700 /data/caddy /config/caddy
+USER 10001:10001
