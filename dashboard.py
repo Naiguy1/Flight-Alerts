@@ -63,7 +63,8 @@ class SecurityMiddleware:
                 headers.extend([
                     (b"x-content-type-options", b"nosniff"),
                     (b"x-frame-options", b"DENY"),
-                    (b"referrer-policy", b"no-referrer"),
+                    # Keep form Origin headers usable while withholding URL paths and tokens.
+                    (b"referrer-policy", b"strict-origin"),
                     (b"cache-control", b"no-store"),
                     (b"content-security-policy", b"default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"),
                     (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
@@ -301,7 +302,7 @@ def create_app(runtime=None, database=None) -> FastAPI:
         cfg = _config(request)
         blocked = {str(value).strip().lower() for value in cfg["filters"].get("blocked_destinations", [])}
         active = [d["code"] for d in cfg["monitored_destinations"] if d["code"].lower() not in blocked and d["city"].lower() not in blocked]
-        snapshot = _safe_snapshot(request.app.state.db.dashboard_snapshot(active, freshness_hours=cfg["filters"].get("freshness_hours", 24)))
+        snapshot = _safe_snapshot(request.app.state.db.dashboard_snapshot(active, active_origins=cfg["scanner"]["origins"]))
         token = request.app.state.csrf.issue("admin")
         messages = {"saved": "Settings saved.", "invited": "Verification email queued; confirmation is required before alerts.", "confirmed": "This recipient is already confirmed.", "disabled": "Recipient disabled.", "queued": "Work queued for the worker.", "busy": "A scan is already queued, running, or in its cooldown period.", "watch": "Flight watch saved.", "removed": "Item removed."}
         response = HTMLResponse(TEMPLATES.get_template("dashboard.html").render(
