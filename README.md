@@ -1,30 +1,67 @@
 # Flight-Alerts
 
-A single-host flight-deal monitor with a protected administrator dashboard,
-provider quota controls, persistent scan jobs, verified email subscriptions,
-per-recipient delivery retries, quiet hours, digests, and optional flight-status
-change alerts.
+Flight-Alerts watches flight prices and emails you when a fare meets your deal
+settings. You run it on your own Linux computer or server and manage it through
+a password-protected website.
 
-The application uses Python 3.12, FastAPI, server-rendered escaped templates, and
-local SQLite with versioned migrations. SQLite is supported on one host with
-local persistent storage. PostgreSQL and shared multi-host database volumes are
-not supported by this release.
+It finds fares; it does not buy tickets or hold a price. You still book with the
+flight provider. Searches use USD, and provider access may require a paid plan.
 
-## Start with a private deployment
+## Start here
 
-1. Read [the deployment and migration runbook](docs/deployment.md).
-2. Copy `.env.example` to `.env` and set the public HTTPS hostname and sender.
-3. Create private secrets with `sudo python -m tools.init_secrets --uid 10001 --gid 10001` after installing the locked dependencies. Use a strong administrator password. Keep the generated secret files outside Git and image layers.
-4. Configure provider and SMTP secret files privately. A provider without a key is disabled; the optional scraper is disabled by default.
-5. Build and start with `docker compose up --build -d`. The migration service completes before web/worker startup. Caddy is the only public entry point.
-6. Sign in over HTTPS, invite recipients, and have each confirm their subscription. Queue a scan, inspect provider health, and confirm per-recipient delivery results.
-7. Complete [production readiness](docs/production-readiness.md) before public use.
+| What you want to do | Read this |
+|---|---|
+| Install it for the first time | [Beginner setup guide](docs/getting-started.md) |
+| Learn the dashboard and receive your first alert | [Using Flight-Alerts](docs/using-flight-alerts.md) |
+| Fix a setup, login, scan, or email problem | [Troubleshooting](docs/troubleshooting.md) |
+| Back up, stop, or update an existing installation | [Operations](docs/operations.md) |
+| Move an older installation to this version | [Deployment and migration](docs/deployment.md#preserve-existing-deployments) |
 
-No real recipient address or production credential belongs in `config.yaml`.
-That file seeds settings once; subsequent dashboard edits are transactional and
-stored in the database. An explicitly empty recipient list disables deliveries.
+The first-time guide uses Docker, so you do not need to install Python on the
+server. It walks through the hostname, private credentials, a small starter
+configuration, startup checks, and your first confirmed email subscription.
+**An existing installation should use the upgrade instructions instead.**
 
-## Development and checks
+## What you need
+
+- One Linux server with a 64-bit Intel/AMD processor (`uname -m` shows `x86_64`).
+- Git, Docker Engine, and the Docker Compose plugin (`docker compose`).
+- A real hostname pointing to that server, with a plan for HTTPS and ports 80/443.
+- At least one supported fare-provider account for searches, and an SMTP account
+  for sending mail. API keys and mail credentials stay in private files.
+- Local disk space for the database and a separate backup plan.
+
+This release supports one administrator and one server. The database is SQLite,
+which stores the project's settings and history in a local persistent volume.
+Shared network storage and multiple database hosts are not supported.
+
+## How it works
+
+| Part | What it does |
+|---|---|
+| Dashboard (`flight_web`) | Lets the administrator change settings and inspect results |
+| Worker (`flight_worker`) | Searches providers and sends queued messages |
+| Database volume (`flight_data`) | Keeps settings, subscriptions, prices, and delivery history across restarts |
+| HTTPS proxy (`proxy`) | Provides the secure website and certificate |
+| Setup job (`migrate`) | Prepares or upgrades the database before the other services start |
+
+Recipients must accept their invitation before receiving fare or flight-status
+alerts. Quiet hours delay delivery; digests group fare alerts. A scan with no
+qualifying deal can finish successfully without sending an email.
+
+## Current project status
+
+[PR #7](https://github.com/Naiguy1/Flight-Alerts/pull/7) has merged into `main` at
+`82537e8a53390b08b230eaf721ee5b62664a9d53`. Install from `main`; you do not need to
+merge the old `production-hardening` branch yourself. The
+[release record](docs/production-readiness.md#release-record) tracks automated
+checks and the host/provider checks still needed before production use.
+A merged pull request does not start or upgrade your server.
+
+## For developers
+
+Use CPython 3.12 on Linux amd64 for the supported dependency locks. These
+commands test the code without real flight-provider or SMTP credentials:
 
 ```bash
 python3.12 -m venv .venv
@@ -36,32 +73,21 @@ python -m tools.verify_lock
 python -m tools.backup self-test
 ```
 
-The hash locks target CPython 3.12 on Linux amd64. Regenerate them on that target
-using `python -m tools.lock_dependencies --scraper`, review the diff, then rerun
-the complete CI/security checks. Production installation uses
-`--require-hashes`; dependency changes require review. CI's lock-resolution
-workflow can generate the files on an isolated GitHub runner. It runs with read-only repository permissions and uploads generated locks for
-review; a maintainer commits those files after assessing the dependency diff.
+The production image has no package installer. Change dependencies through a
+reviewed lock update and rebuild the image. See [supply-chain verification](docs/supply-chain.md)
+for lock generation, image scanning, and SBOM details. The required automated
+checks are **Tests, Security, Image, and CodeQL**.
 
-CI runs regressions, lint, package auditing, full-history secret scanning,
-CodeQL, a container build/vulnerability scan, and an image SBOM. CI success does
-not verify deployment DNS, issued certificates, host encryption, provider plan
-entitlements, or an actual production-data restore.
+## Further reading
 
-## Operations and behavior
-
-- [Deployment, secrets, upgrade, rollback](docs/deployment.md)
-- [Backup, restore, and incident response](docs/operations.md)
-- [Architecture and delivery guarantees](docs/architecture.md)
-- [Production readiness and external verification](docs/production-readiness.md)
+- [Deployment details and upgrades](docs/deployment.md)
+- [Backups, monitoring, and recovery](docs/operations.md)
+- [Architecture and limitations](docs/architecture.md)
+- [Production readiness](docs/production-readiness.md)
+- [Maintainer merge procedure](docs/merging.md)
 - [Security policy](SECURITY.md)
 
-Provider failures and searches with no offers are tracked separately. Booking
-links are restricted to approved HTTPS hosts; discovered fares can expire and
-are not reservations. Status integration requires an eligible Aviationstack
-account and its supported flight/date coverage; it is disabled without a key.
-
-SMTP delivery has an unavoidable uncertain-acknowledgment case. Persistent
-leases and per-recipient states recover work, but a crash after SMTP acceptance
-may result in a duplicate. This release provides recoverable, at-least-once
-processing rather than an exactly-once email guarantee.
+SMTP can occasionally produce a duplicate when a server accepts a message but
+its acknowledgment is lost. Delivery state survives restarts, but exactly-once
+email is not guaranteed. Provider coverage, quotas, and data rights depend on
+your account; successful software tests do not verify those external services.
