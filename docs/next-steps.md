@@ -1,48 +1,40 @@
 # Next steps and release roadmap
 
-The hardening implementation is consolidated on `production-hardening`, targeting
-`main`. Agent work is part of that branch; there are no separate agent branches
-to merge in a particular order. Use [the merge guide](merging.md) for the release.
-Repository controls and synthetic tests do not establish that a real host or
-external provider is production-ready.
+Start with the [beginner setup guide](getting-started.md) for a new deployment,
+or [the dashboard guide](using-flight-alerts.md) if it is already running. This
+page is the remaining release and operations checklist for maintainers/operators.
+A maintainer changes the repository; an operator runs and verifies the server.
+They can be the same person, but the checks still need to be completed.
 
-## Current status (2026-10-27)
+## Current status (verified 2026-10-28)
 
-The original hardening PR [#1](https://github.com/Naiguy1/Flight-Alerts/pull/1)
-has merged. Its resulting `main` commit is
-`3c5b9e16bb89c3906b053bbab2a5d468303f2c8a`, with all four required checks passing
-and 249 tests executed without skips. Subsequent release fixes on
-`production-hardening` must pass their own checks and independent review before
-another merge. See the [release record](production-readiness.md#release-record).
+[PR #1](https://github.com/Naiguy1/Flight-Alerts/pull/1) and
+[PR #7](https://github.com/Naiguy1/Flight-Alerts/pull/7) have merged. The resulting
+`main` SHA for PR #7 is `82537e8a53390b08b230eaf721ee5b62664a9d53`. Its
+[CI](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40604743617) and
+[CodeQL](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40604743601) passed,
+including all 264 tests with zero skips. Install from `main`; neither merged PR
+needs to be merged again. Future changes use a new pull request.
 
-The follow-up fixes recheck freshness and subscription confirmation after SMTP
-quota waits, prune expired individual digest fares after revalidation, and make
-the image gate validate/publish the SBOM inventory and all vulnerability severity
-counts. No scanner gate is disabled or weakened.
+The merged code includes notification freshness/consent checks after SMTP waits,
+digest pruning, bounded retries for SQLite WAL initialization, removal of unused
+vulnerable runtime installers, the fixed proxy router and readable SBOM evidence.
+The remaining OpenPGP module observation has a
+[scoped package-applicability assessment](supply-chain.md#follow-up-finding-review-2026-10-27).
+See [the release record](production-readiness.md#release-record) for exact evidence.
 
-The expanded image report also exposed old system/virtualenv installers and a
-proxy router finding. The follow-up removes both unused runtime installers and
-pins the fixed proxy router. The remaining module-level OpenPGP advisory needs
-the [scoped package-applicability review](supply-chain.md#follow-up-finding-review-2026-10-27)
-and the CI proof that affected packages are absent.
-
-Reviewed implementation `dd2069cac8d8a0efc8aeca945787afd90102a82f` now also retries
-transient WAL initialization locks before migrations. Its locked CI suite passes
-264 tests with zero skips; the final application scan has zero vulnerabilities
-at every severity. The release record links the exact CI, SBOM and proxy
-applicability evidence. Follow-up PR #7 remains a draft for independent review
-and the remaining repository/operator gates.
-
-Release remains blocked on an eligible independent reviewer, applying/verifying
-the supplied branch protection, and the deployment operator's production-data
-restore rehearsal and host/service/staging evidence. Repository access alone
-does not provide the deployment database, host access, DNS or provider accounts.
+A merge is not a server deployment. Repository protection/review-policy evidence
+and actual backup/restore, host, provider and controlled delivery checks still
+need operator sign-off. No independent approving review was recorded on PR #7;
+GitHub reported `main` as unprotected when checked. Do not infer those controls
+or a successful production deployment from the merge or green CI.
 
 ## 1. Finish the review and release gates
 
 Owner: repository maintainer and an independent reviewer.
 
-- Review the complete `main...production-hardening` diff, especially migrations,
+- For the merged change, review PR #7's complete diff; for new work, review its
+  current pull-request diff. Pay particular attention to migrations,
   authentication/CSRF, token handling, provider credentials, quota accounting,
   and SMTP retry/uncertain-acknowledgment behavior.
 - Require the final commit's **Tests**, **Security**, **Image**, and **CodeQL**
@@ -101,7 +93,7 @@ Owner: deployment operator.
   incomplete scans, pending/failed deliveries, worker heartbeat, disk usage, and
   backup failures. Set log and backup retention explicitly.
 
-## 4. Stage, merge, and release gradually
+## 4. Deploy the merged revision gradually
 
 Owner: maintainer and deployment operator.
 
@@ -110,9 +102,9 @@ Owner: maintainer and deployment operator.
   subscription confirmation/unsubscribe, pause/quiet/digest behavior, and bounded
   scanning. Use only a deliberately controlled, confirmed recipient for a real
   delivery test.
-- Merge the reviewed branch after final checks pass, rebuild from the merged
-  commit, and record the resulting image ID/digest. A squash merge creates a new
-  `main` SHA, so wait for its checks before deployment.
+- For future changes, merge only after review and final checks. Rebuild from the
+  resulting `main` commit and record its image IDs/digests. A merged SHA has its
+  own checks, even when its pull request was already green.
 - Begin with conservative quotas and a small route/watch set. Inspect successful
   provider data and recipient delivery outcomes before increasing coverage.
 - Keep the prior image and verified pre-upgrade backup until the observation

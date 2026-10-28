@@ -1,5 +1,10 @@
 # Production readiness
 
+**New to the project?** The [setup guide](getting-started.md) explains installation,
+and [Using Flight-Alerts](using-flight-alerts.md) explains the dashboard. This is
+the operator's sign-off record: a place to write down which real-world checks
+have been completed before depending on the deployment.
+
 This maps every audit checklist item to implemented controls and the evidence
 still required on the actual deployment. A committed control is not proof that
 an external service/host setting has been configured. Record the deployed SHA,
@@ -39,10 +44,26 @@ limits growth. See the architecture runbook for single-host/SMTP limitations.
 
 ## Release record
 
+### Merged revision (verified 2026-10-28)
+
+[PR #7](https://github.com/Naiguy1/Flight-Alerts/pull/7) merged on 2026-10-27 at
+17:49 America/Denver. Its resulting `main` SHA is
+`82537e8a53390b08b230eaf721ee5b62664a9d53`.
+[CI](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40604743617) passed Tests,
+Security and Image, with 264 tests and zero skips;
+[CodeQL](https://github.com/Naiguy1/Flight-Alerts/actions/runs/40604743601) also passed.
+The pre-merge implementation evidence below remains historical evidence for its
+specified SHA, not a claim that a deployment happened. No independent approving
+review is recorded on PR #7; main was still unprotected when checked. Repository
+policy and operator sign-offs remain outstanding despite the completed merge.
+
+
 ### Verified implementation candidate, 2026-10-27
 
-**Decision: automated code gates passed; production release remains on hold for
-independent approval, repository protection and operator sign-off.**
+**Historical pre-merge decision:** automated code gates passed; independent
+approval, repository protection and operator sign-off were still outstanding.
+The change has since merged as recorded above. Operator evidence is still needed
+before production use.
 
 Reviewed implementation SHA: `dd2069cac8d8a0efc8aeca945787afd90102a82f`, delivered
 in [PR #7](https://github.com/Naiguy1/Flight-Alerts/pull/7) from
@@ -74,10 +95,10 @@ SHA256 is `69f4947107ce0367d3916c81855a5d60239123b7d94d10f0ef3eb82dd3c462b8`.
 The module-level finding remains visible, and the independent approver must
 review the assessment. No scanner suppression or severity downgrade was adopted.
 
-Documentation-only evidence updates after the implementation SHA must also pass
-the four required checks on their final PR head. The review record in PR #7
-identifies that final head. After merging, wait for the resulting main SHA's
-checks and rebuild from it; CI image inventory is not a deployed image digest.
+The final PR #7 head was `f11dc874ce2d56e519555add1cc85cebd4d0ba32`, and its
+required checks passed before merge. Its resulting main checks passed as recorded
+above. Future changes must likewise pass their final-head and merged-main checks;
+CI image inventory is not a deployed image digest.
 
 ### Outstanding repository and deployment gates
 

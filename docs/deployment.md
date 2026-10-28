@@ -1,5 +1,14 @@
 # Deployment and migration
 
+**First installation?** Follow the [beginner setup guide](getting-started.md).
+It uses Docker for credential initialization, starts with one small search, and
+explains the expected result at each step. For everyday controls, see the
+[dashboard guide](using-flight-alerts.md).
+
+This page covers deployment details, an alternative host-Python setup and
+upgrades of existing data. A migration is a database-format upgrade; it does not
+mean the project has been installed on your server merely because a PR merged.
+
 ## Supported topology
 
 Use one Linux amd64 host, CPython 3.12, and a local Docker named volume. Do not
@@ -23,7 +32,14 @@ restricted administrative access. Ensure DNS A/AAAA records point at the host,
 that only intended ingress ports are allowed, and that the host can reach the
 certificate authority. Use a real hostname and administrator-owned ACME email.
 
-## Initial setup
+## Alternative initialization with host Python
+
+Use this alternative only if you already have CPython 3.12 on the supported
+Linux amd64 host. The beginner guide does not need host Python. Choose one setup
+path; do not repeat initialization to reset an existing deployment.
+
+The bundled YAML contains many example destinations. Choose a small first
+configuration before the database is seeded, as described in the beginner guide.
 
 ```bash
 cp .env.example .env
