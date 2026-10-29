@@ -1,0 +1,6 @@
+# Copy into your local Compose override, preserving unrelated local settings.
+# Existing Caddy must join flight-alerts_app at 172.30.80.2 (see the guide).
+# Start only migrate, flight_web and flight_worker; Caddy remains separately managed.
+services:
+  proxy:
+    profiles: [bundled-proxy]

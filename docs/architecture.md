@@ -64,7 +64,7 @@ The application image uses a digest-pinned official CPython 3.12 Alpine runtime.
 Exact Python dependency versions retain reviewed glibc and musllinux wheel hashes;
 no source-package build is permitted during runtime dependency installation. The
 proxy is rebuilt from the fixed Caddy v2.11.7 module using a pinned Go 1.27.3
-builder and x/net v0.60.0. Go verifies module downloads with the public checksum
+builder and x/net v0.62.0. Go verifies module downloads with the public checksum
 database. Runtime proxy layers contain the static binary, certificates and timezone
 data rather than the upstream image's unrelated curl/brotli tools. Actual image
 SBOMs and strict high/critical vulnerability gates remain mandatory after any

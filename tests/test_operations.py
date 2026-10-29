@@ -154,7 +154,8 @@ class SupplyChainTests(unittest.TestCase):
         proxy_image = (ROOT / "Dockerfile.proxy").read_text()
         self.assertIn("CGO_ENABLED=0", proxy_image)
         self.assertIn("COPY --from=builder /out/caddy /usr/bin/caddy", proxy_image)
-        self.assertIn("golang.org/x/net@v0.60.0", proxy_image)
+        self.assertIn("golang.org/x/net@v0.62.0", proxy_image)
+        self.assertIn("github.com/go-jose/go-jose/v4@v4.1.6", proxy_image)
         self.assertIn("request delete", (ROOT / "docs/Caddyfile").read_text())
         self.assertIn("chmod 0700 /data/caddy /config/caddy", proxy_image)
 
@@ -274,6 +275,8 @@ class SupplyChainTests(unittest.TestCase):
         trusted = {"GITHUB_REPOSITORY": "Naiguy1/Flight-Alerts", "GITHUB_EVENT_NAME": "push",
                    "GITHUB_REF": "refs/heads/production-hardening", "GITHUB_SHA": "a" * 40}
         self.assertTrue(trusted_event(trusted))
+        self.assertTrue(trusted_event({**trusted, "GITHUB_REF":
+                                      "refs/heads/fix/dashboard-90-day-deals-and-form-origin"}))
         for key, value in (("GITHUB_EVENT_NAME", "pull_request"), ("GITHUB_EVENT_NAME", "pull_request_target"),
                            ("GITHUB_REPOSITORY", "untrusted/fork"), ("GITHUB_REF", "refs/heads/other"),
                            ("GITHUB_SHA", "not-a-commit")):

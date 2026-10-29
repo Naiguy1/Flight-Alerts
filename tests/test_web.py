@@ -188,6 +188,23 @@ class WebTests(unittest.TestCase):
         response = self.post("/blocklist/add", {"term": "DUB", "config_version": self.db.get_config_version() + 1})
         self.assertEqual(response.status_code, 409)
 
+    def test_browser_form_policy_and_origin_checks_for_scan_and_settings(self):
+        response = self.client.get("/", auth=self.auth)
+        # no-referrer can turn browser POST Origin into null; strict-origin
+        # retains the origin without exposing signed URLs or query strings.
+        self.assertEqual(response.headers["referrer-policy"], "strict-origin")
+        token = self.csrf()
+        settings = dict(csrf_token=token, config_version=self.db.get_config_version(),
+                        threshold=50, freshness_hours=24)
+        for path, data in (("/scan", {"csrf_token": token}), ("/settings", settings)):
+            for headers in ({}, {"Origin": "null"}, {"Origin": "https://evil.example"},
+                            [("Origin", "https://testserver"), ("Origin", "https://testserver")]):
+                self.assertEqual(self.client.post(path, data=data, auth=self.auth,
+                                                 headers=headers).status_code, 403)
+            result = self.client.post(path, data=data, auth=self.auth,
+                                      headers={"Origin": "https://testserver"}, follow_redirects=False)
+            self.assertEqual(result.status_code, 303, result.text)
+
     def test_manual_scan_is_queued_once_globally(self):
         self.assertEqual(self.post("/scan").status_code, 303)
         response = self.post("/scan")
@@ -262,7 +279,7 @@ class WebTests(unittest.TestCase):
         response = self.client.get("/", auth=self.auth)
         self.assertIn("frame-ancestors 'none'", response.headers["content-security-policy"])
         self.assertEqual(response.headers["x-content-type-options"], "nosniff")
-        self.assertEqual(response.headers["referrer-policy"], "no-referrer")
+        self.assertEqual(response.headers["referrer-policy"], "strict-origin")
         cookie = response.headers["set-cookie"]
         for attribute in ("Secure", "HttpOnly", "SameSite=strict"):
             self.assertIn(attribute, cookie)

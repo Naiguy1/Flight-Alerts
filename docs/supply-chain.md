@@ -27,7 +27,7 @@ The first image scan rejected the earlier Python slim/stock Caddy images because
 of high-severity OS and Go dependency findings. Those images are no longer build
 inputs. `Dockerfile.proxy` rebuilds the fixed
 [Caddy v2.11.7 module](https://github.com/caddyserver/caddy/tree/v2.11.7) with
-[x/net v0.60.0](https://github.com/golang/net/tree/v0.60.0) and Go 1.27.3. Go module
+[x/net v0.62.0](https://github.com/golang/net/tree/v0.62.0) and Go 1.27.3. Go module
 downloads are verified through the public checksum database, and `go mod verify`
 runs before a read-only build. The compiled static binary carries its module
 version information for image scanning; runtime package metadata is not removed
@@ -96,3 +96,17 @@ its scripts. Application package metadata is retained. `pip check` runs during
 the build; final distribution inventory verification and the unchanged image
 scanner verify the shipped result independently. This removes vulnerable code
 rather than deleting metadata or suppressing scanner observations.
+
+## Proxy gate follow-up for PR #9
+
+The proxy scan identified CVE-2026-116587 in both JOSE major versions. The
+rebuild explicitly selects go-jose/v4 v4.1.6 and x/net v0.62.0. The
+[upstream JOSE advisory](https://github.com/go-jose/go-jose/security/advisories/GHSA-mgcc-cww5-fp2q)
+lists no patched v3 release; Caddy's Smallstep dependencies still reference v3.
+Keep the image gate blocking while that dependency remains vulnerable. Do not
+ignore the finding, mark it fixed because v4 was upgraded, or replace v3 with
+v4 using a module-path substitution. A compatible upstream migration or reviewed
+backport with an accepted security assessment is required before release.
+
+The external Caddy guide preserves the separately managed existing proxy; it
+does not assess that container's version or assert that its dependencies are safe.

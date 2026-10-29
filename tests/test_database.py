@@ -241,7 +241,8 @@ class MigrationAndStorageTests(DatabaseCase):
             average, count = manager.get_historical_route_stats("SLC", "LHR")
             self.assertEqual((average, count), (300, 1))
             self.assertTrue(manager.is_duplicate_alert("SLC", "LHR", offer["outbound_date"], offer["return_date"], 300))
-            self.assertIn("T", manager.dashboard_snapshot(["LHR"])["recent_deals"][0]["recorded_at"])
+            self.assertEqual(manager.dashboard_snapshot(["LHR"])["recent_deals"], [])
+            self.assertEqual(manager.dashboard_snapshot(["LHR"])["route_stats"][0]["samples"], 1)
             with sqlite3.connect(legacy) as connection:
                 connection.execute("INSERT INTO alert_logs(origin,destination,outbound_date,return_date,alerted_price_usd,"
                                    "average_price_usd,discount_percent,source,sent_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -528,16 +529,40 @@ class ScanQuotaCacheStatusTests(DatabaseCase):
         with self.assertRaises(ValueError):
             self.db.set_provider_cache("bad", [payload])
 
-    def test_freshness_future_travel_and_active_route_filters(self):
-        self.db.record_offer(fare(300))
-        self.db.record_offer(fare(250, destination="CDG"))
-        self.db.record_offer(fare(200, observed_at=(datetime.now(UTC)-timedelta(days=3)).isoformat()))
-        self.db.record_offer(fare(100, offset=-10))
+    def test_dashboard_uses_90_day_average_and_ignores_delivery_freshness(self):
+        now = datetime.now(UTC)
+        # Past travel still contributes to history; observations outside the
+        # rolling window and in the future must not inflate the reference.
+        self.db.record_offer(fare(900, offset=-10, observed_at=(now-timedelta(days=30)).isoformat()))
+        self.db.record_offer(fare(300, observed_at=(now-timedelta(days=3)).isoformat()))
+        self.db.record_offer(fare(10000, offset=-11, observed_at=(now-timedelta(days=91)).isoformat()))
+        self.db.record_offer(fare(10000, offset=-12, observed_at=(now+timedelta(days=1)).isoformat()))
+        self.db.record_offer(fare(100, destination="CDG"))
         self.assertFalse(self.db.dashboard_snapshot([])["recent_deals"])
-        rows = self.db.dashboard_snapshot(["LHR"])["recent_deals"]
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["price_usd"], 300)
-        self.assertEqual(self.db.dashboard_snapshot(["LHR"])["route_stats"][0]["samples"], 1)
+        result = self.db.dashboard_snapshot(["LHR"], freshness_hours=1, active_origins=["SLC"])
+        self.assertEqual(len(result["recent_deals"]), 1)
+        row = result["recent_deals"][0]
+        self.assertEqual((row["price_usd"], row["average_price_usd"], row["discount_percent"]), (300, 600, 50))
+        self.assertEqual(result["route_stats"][0]["samples"], 2)
+        self.assertFalse(self.db.dashboard_snapshot(["LHR"], active_origins=["LAS"])["recent_deals"])
+        self.assertFalse(self.db.dashboard_snapshot(["LHR"], active_origins=[])["recent_deals"])
+        # A newer ordinary price replaces the old deal for that itinerary.
+        self.db.record_offer(fare(901))
+        self.assertFalse(self.db.dashboard_snapshot(["LHR"])["recent_deals"])
+
+    def test_dashboard_has_no_baseline_fallback_and_limits_after_qualification(self):
+        self.db.record_offer(fare(100))
+        self.assertFalse(self.db.dashboard_snapshot(["LHR"])["recent_deals"])
+        for offset in range(-60, 0):
+            self.db.record_offer(fare(1000, offset=offset))
+        # Cheap non-deals on another route must not consume the display limit.
+        for offset in range(20, 50):
+            self.db.record_offer(fare(10, destination="CDG", offset=offset))
+        for offset in range(50, 65):
+            self.db.record_offer(fare(300, offset=offset))
+        rows = self.db.dashboard_snapshot(["LHR", "CDG"])["recent_deals"]
+        self.assertEqual(len(rows), 12)
+        self.assertTrue(all(row["destination"] == "LHR" and row["discount_percent"] >= 50 for row in rows))
 
     def test_status_transition_and_notifications_are_atomic_and_idempotent(self):
         recipient = self.verified()

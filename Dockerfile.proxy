@@ -4,7 +4,7 @@ FROM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01b
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org
 WORKDIR /build
 RUN go mod init flight-alerts-proxy \
-    && go get github.com/caddyserver/caddy/v2/cmd/caddy@v2.11.7 golang.org/x/net@v0.60.0 github.com/go-chi/chi/v5@v5.4.0 \
+    && go get github.com/caddyserver/caddy/v2/cmd/caddy@v2.11.7 golang.org/x/net@v0.62.0 github.com/go-chi/chi/v5@v5.4.0 github.com/go-jose/go-jose/v4@v4.1.6 \
     && go mod verify \
     && mkdir -p /out \
     && go list -mod=readonly -deps github.com/caddyserver/caddy/v2/cmd/caddy > /out/proxy-packages.txt \
