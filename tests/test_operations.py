@@ -274,6 +274,8 @@ class SupplyChainTests(unittest.TestCase):
         trusted = {"GITHUB_REPOSITORY": "Naiguy1/Flight-Alerts", "GITHUB_EVENT_NAME": "push",
                    "GITHUB_REF": "refs/heads/production-hardening", "GITHUB_SHA": "a" * 40}
         self.assertTrue(trusted_event(trusted))
+        self.assertTrue(trusted_event({**trusted, "GITHUB_REF":
+                                      "refs/heads/fix/dashboard-90-day-deals-and-form-origin"}))
         for key, value in (("GITHUB_EVENT_NAME", "pull_request"), ("GITHUB_EVENT_NAME", "pull_request_target"),
                            ("GITHUB_REPOSITORY", "untrusted/fork"), ("GITHUB_REF", "refs/heads/other"),
                            ("GITHUB_SHA", "not-a-commit")):
