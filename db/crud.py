@@ -634,8 +634,12 @@ class DatabaseManager:
                  None if success else now, max(0.0, float(latency_ms)), "" if success else _error(error), now),
             )
 
-    def dashboard_snapshot(self, active_codes: list, freshness_hours: int = 24) -> dict:
-        cutoff = _iso(_now() - timedelta(hours=max(1, int(freshness_hours))))
+    def dashboard_snapshot(self, active_codes: list, freshness_hours: int = 24,
+                           active_origins: list | None = None) -> dict:
+        # freshness_hours is retained for caller compatibility; delivery freshness
+        # does not determine which historical discounts appear on the dashboard.
+        now = _now()
+        cutoff = _iso(now - timedelta(days=90))
         codes = sorted({code for code in active_codes if re.fullmatch(r"[A-Z]{3}", str(code))})[:500]
         with self._read() as connection:
             alerts = [dict(row) for row in connection.execute("SELECT a.*,"
@@ -648,16 +652,43 @@ class DatabaseManager:
             recent, stats = [], []
             if codes:
                 placeholders = ",".join("?" for _ in codes)
-                parameters = [*codes, cutoff, _iso(_now() + timedelta(minutes=5)), _now().date().isoformat()]
-                where = f"destination IN ({placeholders}) AND observed_at>=? AND observed_at<=? AND outbound_date>=? AND price_usd>0 AND price_usd<=10000000 AND currency='USD'"
+                origins = sorted({code for code in (active_origins or [])
+                                  if re.fullmatch(r"[A-Z]{3}", str(code))})[:10]
+                origin_filter = ""
+                parameters = [*codes, cutoff, _iso(now)]
+                if active_origins is not None:
+                    if origins:
+                        origin_filter = " AND origin IN (" + ",".join("?" for _ in origins) + ")"
+                        parameters.extend(origins)
+                    else:
+                        origin_filter = " AND 0"
+                # Include historical travel dates in the reference, normalize UTC
+                # offsets, and exclude invalid/future observations and prices.
+                history = (
+                    "WITH history AS (SELECT *,julianday(COALESCE(observed_at,recorded_at)) AS observed_jd "
+                    f"FROM price_history WHERE destination IN ({placeholders}) "
+                    "AND julianday(COALESCE(observed_at,recorded_at)) BETWEEN julianday(?) AND julianday(?) "
+                    "AND currency='USD' AND price_usd>0 AND price_usd<=10000000"
+                    + origin_filter + "), route_averages AS ("
+                    "SELECT origin,destination,COUNT(*) AS samples,AVG(price_usd) AS avg_price "
+                    "FROM history GROUP BY origin,destination) "
+                )
                 recent = [dict(row) for row in connection.execute(
-                    f"SELECT * FROM price_history WHERE {where} ORDER BY price_usd,observed_at DESC LIMIT 20", parameters)]
+                    history + ",latest AS (SELECT *,ROW_NUMBER() OVER ("
+                    "PARTITION BY origin,destination,outbound_date,return_date "
+                    "ORDER BY observed_jd DESC,id DESC) AS observation_rank FROM history) "
+                    "SELECT f.*,r.avg_price AS average_price_usd,r.samples,"
+                    "(1.0-f.price_usd/r.avg_price)*100.0 AS discount_percent "
+                    "FROM latest f JOIN route_averages r USING(origin,destination) "
+                    "WHERE f.observation_rank=1 AND f.outbound_date>=? "
+                    "AND f.price_usd<=r.avg_price*0.5 "
+                    "ORDER BY discount_percent DESC,f.observed_jd DESC,f.id DESC LIMIT 12",
+                    [*parameters, now.date().isoformat()])]
                 for row in recent:
                     row["airlines"] = row["airlines"].split(", ") if row["airlines"] else []
                 stats = [dict(row) for row in connection.execute(
-                    f"SELECT origin,destination,MAX(destination_city) AS destination_city,MAX(country_code) AS country_code,"
-                    f"COUNT(*) AS samples,MIN(price_usd) AS min_price,AVG(price_usd) AS avg_price FROM price_history WHERE {where} "
-                    "GROUP BY origin,destination ORDER BY origin,destination LIMIT 100", parameters)]
+                    history + "SELECT * FROM route_averages ORDER BY origin,destination LIMIT 100",
+                    parameters)]
             jobs = [dict(row) for row in connection.execute("SELECT id,status,created_at,started_at,finished_at,heartbeat_at,last_error,attempts "
                                                           "FROM scan_jobs ORDER BY id DESC LIMIT 20")]
             deliveries = [dict(row) for row in connection.execute("SELECT d.id,d.recipient_id,r.email,d.kind,d.status,d.attempts,"

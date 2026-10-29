@@ -31,7 +31,7 @@ a problem report. Do not paste `.env` or secret-file contents into an issue.
 | HTTPS certificate fails | Check real DNS, any A/AAAA records, certificate-authority reachability, firewall/router forwarding and the proxy log. `example.com` placeholders will not work. |
 | `HTTPS required` or `Invalid host` | Use the configured HTTPS hostname through Caddy. `PUBLIC_HOST` and `PUBLIC_BASE_URL` must match. Direct access to port 8000 or a different hostname is unsupported. |
 | Browser asks for credentials repeatedly | Use `ADMIN_USERNAME` and the administrator password from initialization, not your SMTP password or API key. The initialization tool does not overwrite an existing hash when rerun. |
-| `Invalid form token`, origin rejection or settings conflict | Reload the page, use the exact configured HTTPS origin, and retry with one current dashboard tab. Avoid resubmitting an old form. |
+| `Invalid form token`, origin rejection or settings conflict | Reload the page, use the exact configured HTTPS origin, and retry with one current dashboard tab. The dashboard must use `Referrer-Policy: strict-origin`; `no-referrer` can make browser form POSTs send `Origin: null`. Upgrade older images and check proxy header overrides. Do not disable origin or CSRF verification. Avoid resubmitting an old form. |
 | Too many authentication attempts | Wait at least a minute before trying again; do not repeatedly submit guesses. |
 
 The two built-in health probes can be run explicitly:

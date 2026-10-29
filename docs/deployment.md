@@ -32,6 +32,8 @@ restricted administrative access. Ensure DNS A/AAAA records point at the host,
 that only intended ingress ports are allowed, and that the host can reach the
 certificate authority. Use a real hostname and administrator-owned ACME email.
 
+For a host that already runs Caddy, use [the existing Caddy integration guide](existing-caddy.md). It keeps the web app on its dedicated network and attaches the existing proxy at the trusted fixed address.
+
 ## Alternative initialization with host Python
 
 Use this alternative only if you already have CPython 3.12 on the supported

@@ -35,8 +35,8 @@ Reload the page if another tab has already saved newer settings.
 
 | Setting | Meaning and example |
 |---|---|
-| Minimum discount (%) | How far below the selected reference price a fare must be. A $250 fare against a $1000 reference is 75% below it. |
-| Fare freshness (hours) | How long an observed fare is usable; old or past-departure fares are excluded. Queued fares are checked again before sending. |
+| Alert minimum discount (%) | How far below the selected reference price a fare must be. A $250 fare against a $1000 reference is 75% below it. |
+| Delivery maximum fare age (hours) | How long an observed fare is usable; old or past-departure fares are excluded. Queued fares are checked again before sending. |
 | Scan interval (hours) | How often the worker schedules searches. The starter guide uses 24 hours. |
 | Repeat-alert cooldown (hours) | Limits repeated alerts for the same route during this window. |
 | Price improvement (USD) / (%) | A new lower price can bypass that cooldown if **either** improvement threshold is met. |
@@ -92,7 +92,7 @@ An already queued/running scan or the manual cooldown can prevent another job.
 | Provider health has a recent success | That provider returned a usable response, possibly with no offers |
 | A scan succeeded | Its search windows completed with the required provider coverage |
 | A scan failed / is incomplete | Check its safe error category and the provider table; some routes may still have results |
-| Fresh fares has entries | Recently observed prices on active routes, not necessarily alert-worthy deals |
+| 50% below average has entries | Latest itinerary observations at least 50% below their route’s rolling 90-day USD average; delivery freshness does not filter this list |
 | Latest reserved alerts has an entry | A notification intent was saved; it does not prove everyone received it |
 | Per-recipient delivery says `sent` | The configured SMTP server accepted the message; inbox placement is still up to the mail service |
 
@@ -101,6 +101,16 @@ disable providers. More origins, destinations and travel-date samples mean more
 searches, and retries/rechecks also consume allowance. Keep limits below the
 purchased plan. A provider can require additional permissions or lack coverage
 for a route even when its key is valid.
+
+The dashboard fare list uses only recorded route history, with no provider or
+configured-baseline fallback. It shows at most 12 upcoming itineraries, using
+only the latest observation for each itinerary within the rolling 90-day window.
+The route average includes every valid USD observation in that window (including
+the latest price and observations for past travel dates). It displays the average,
+discount, observation time and sample count; a displayed fare is not a guarantee
+of current availability. A route with no qualifying discount has no entries.
+The dashboard's fixed 50% filter is independent of the alert threshold and delivery
+age settings.
 
 The reference used for an alert may come from provider typical-price data,
 sufficient historical observations, or your configured reference. Read the
