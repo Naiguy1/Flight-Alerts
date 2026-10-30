@@ -1,7 +1,6 @@
 """Durable per-recipient notification processing with quiet hours and digests."""
 from __future__ import annotations
 
-import html
 import logging
 from collections import defaultdict
 from collections.abc import Callable
@@ -9,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
-from notifier.emailer import DeliveryError, EmailNotifier, render_deal, render_message, render_status
+from notifier.emailer import DeliveryError, EmailNotifier, render_deal, render_invitation, render_message, render_status
 from notifier.tokens import TokenSigner
 
 logger = logging.getLogger(__name__)
@@ -174,20 +173,8 @@ class DeliveryService:
         unsubscribe = self._link(recipient_id, "unsubscribe")
         if kind == "verification":
             confirmation = self._link(recipient_id, "confirm")
-            subject = "Confirm your Flight-Alerts subscription"
-            plain = (
-                "An administrator invited this address to Flight-Alerts.\n"
-                "Confirm only if you want to receive flight alerts:\n" + confirmation
-                + "\nThis confirmation link expires in 48 hours.\n"
-                "If this invitation was unexpected, ignore it or disable it:\n" + unsubscribe + "\n"
-            )
-            content = (
-                '<p>An administrator invited this address to Flight-Alerts.</p>'
-                '<p>Confirm only if you want to receive flight alerts.</p>'
-                '<p><a href="' + html.escape(confirmation, quote=True) + '">Confirm subscription</a></p>'
-                '<p>This confirmation link expires in 48 hours. If this invitation was unexpected, ignore it or use the unsubscribe link.</p>'
-            )
-            return subject, plain, render_message(subject, content, unsubscribe), unsubscribe
+            subject, plain, message = render_invitation(confirmation, unsubscribe)
+            return subject, plain, message, unsubscribe
         if kind == "status":
             subject, plain, card = render_status(rows[0]["payload"])
             return subject, plain + "\nUnsubscribe: " + unsubscribe + "\n", render_message(subject, card, unsubscribe), unsubscribe
@@ -206,7 +193,7 @@ class DeliveryService:
             rendered = [render_deal(payload) for payload in payloads]
             subject = rendered[0][0] if len(rendered) == 1 else f"Flight deal digest: {len(rendered)} fares"
             plain = "\n\n".join(item[1] for item in rendered) + "\nUnsubscribe: " + unsubscribe + "\n"
-            return subject, plain, render_message(subject, "".join(item[2] for item in rendered), unsubscribe), unsubscribe
+            return subject, plain, render_message("Your flight deal" if len(rendered) == 1 else "Your flight deal digest", "".join(item[2] for item in rendered), unsubscribe), unsubscribe
         raise ValueError("Unsupported notification kind")
 
     def _process_group(self, rows: list[dict], filters: dict, digest: bool) -> int:

@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.concurrency import run_in_threadpool
 
+from web.presentation import money, observed_time, percentage, travel_date
 from web.security import CSRFSigner, LoginLimiter, canonical_https_origin, valid_password_hash, verify_password
 
 logger = logging.getLogger("flight_alerts.web")
@@ -30,15 +31,9 @@ TEMPLATES = Environment(
     loader=FileSystemLoader(Path(__file__).parent / "web" / "templates"),
     autoescape=select_autoescape(["html"], default_for_string=True, default=True),
 )
-CSS = """
-:root {font-family:system-ui,sans-serif;color:#132b40;background:#f1f5f9;color-scheme:light}
-body {max-width:1200px;margin:auto;padding:24px} header,nav,.row{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
-header{justify-content:space-between}nav{margin:20px 0}a{color:#075da8}section{background:white;border:1px solid #d9e2eb;border-radius:10px;padding:20px;margin:18px 0;overflow:auto}
-h1{margin-bottom:4px}h2{font-size:1.2rem}small,.muted{color:#526878}.notice{padding:14px;background:#e3f0fb;border-radius:8px}
-label{display:inline-flex;flex-direction:column;gap:5px;margin:6px 10px 8px 0}input,select,button{font:inherit;padding:9px;border:1px solid #aebdcb;border-radius:5px}
-button{background:#075da8;color:white;cursor:pointer}button.danger{background:#9d2222}table{width:100%;border-collapse:collapse}td,th{padding:10px;border-bottom:1px solid #e0e7ee;text-align:left}
-form{display:inline}fieldset{border:1px solid #d9e2eb;margin:14px 0}.check{flex-direction:row;align-items:center}code{overflow-wrap:anywhere}.status{font-weight:bold}
-"""
+TEMPLATES.filters.update(money=money, observed_time=observed_time,
+                         percentage=percentage, travel_date=travel_date)
+CSS = (Path(__file__).parent / "web" / "static" / "dashboard.css").read_text(encoding="utf-8")
 
 
 class SecurityMiddleware:

@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 from fetcher.base import sanitize_booking_url
+from web.presentation import money, observed_time, percentage, travel_date as display_date
 
 _LOCAL_CHARACTERS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+/=?^_`{|}~-")
 _DOMAIN_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z")
@@ -93,16 +94,60 @@ def _positive(value: Any) -> float:
     return number
 
 
+def email_button(label: str, url: str) -> str:
+    """A real HTTPS link with inline styles for clients without stylesheet support."""
+    return ('<table role="presentation" cellpadding="0" cellspacing="0"><tr><td bgcolor="#0b7353" '
+            'style="border-radius:8px;background-color:#0b7353;text-align:center">'
+            '<a href="' + html.escape(_https_url(url), quote=True) + '" '
+            'style="display:inline-block;padding:15px 24px;color:#ffffff;font-weight:bold;'
+            'font-size:16px;line-height:24px;text-decoration:none">'
+            + html.escape(_text(label, 100)) + '</a></td></tr></table>')
+
+
 def render_message(title: str, body_html: str, unsubscribe_url: str | None = None) -> str:
+    title = html.escape(_text(title, 200))
     footer = ""
     if unsubscribe_url is not None:
-        footer = '<p><a href="' + html.escape(_https_url(unsubscribe_url), quote=True) + '">Unsubscribe from alerts</a></p>'
-    # body_html must consist exclusively of markup built by the escaped helpers
-    # in this module; do not pass arbitrary caller or provider HTML here.
-    return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>'
-            + html.escape(_text(title, 200)) + '</title></head><body>'
-            + '<main style="max-width:640px;margin:auto;font-family:Arial,sans-serif">'
-            + '<h1>' + html.escape(title) + '</h1>' + body_html + footer + '</main></body></html>')
+        footer = ('<p style="margin:12px 0 0"><a href="'
+                  + html.escape(_https_url(unsubscribe_url), quote=True)
+                  + '" style="color:#b7d5f8;text-decoration:underline">Unsubscribe from alerts</a></p>')
+    # Only internally generated, escaped markup may be passed as body_html.
+    # Tables and inline colors preserve the design when email CSS is stripped.
+    return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>' + title + '</title></head>'
+            '<body bgcolor="#141b24" style="margin:0;padding:0;background-color:#141b24;'
+            'color:#f3f7fb;font-family:Arial,Helvetica,sans-serif">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#141b24">'
+            '<tr><td align="center" style="padding:24px 12px">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+            'style="max-width:640px;border:1px solid #3a4959;border-radius:16px;background-color:#1f2933">'
+            '<tr><td bgcolor="#102c44" style="padding:28px 24px;background-color:#102c44;'
+            'border-radius:16px 16px 0 0">'
+            '<p style="margin:0 0 10px;color:#9fc5ff;font-size:12px;letter-spacing:2px;font-weight:bold">'
+            'FLIGHT ALERTS</p><h1 style="margin:0;color:#ffffff;font-size:28px;line-height:1.3">'
+            + title + '</h1></td></tr><tr><td style="padding:24px;color:#f3f7fb;line-height:1.6">'
+            + body_html + '</td></tr><tr><td style="padding:20px 24px;border-top:1px solid #3a4959;'
+            'color:#c0cbd7;font-size:12px;line-height:1.6">Flight Alerts' + footer
+            + '</td></tr></table></td></tr></table></body></html>')
+
+
+def render_invitation(confirmation_url: str, unsubscribe_url: str) -> tuple[str, str, str]:
+    confirmation_url, unsubscribe_url = _https_url(confirmation_url), _https_url(unsubscribe_url)
+    subject = "Confirm your Flight-Alerts subscription"
+    plain = ("An administrator invited this address to Flight-Alerts.\n"
+             "Confirm only if you want to receive flight alerts:\n" + confirmation_url
+             + "\nThis confirmation link expires in 48 hours.\n"
+             "If this invitation was unexpected, ignore it or disable it:\n" + unsubscribe_url + "\n")
+    content = ('<p style="margin:0 0 16px;font-size:18px;color:#f3f7fb">You’re invited to Flight Alerts.</p>'
+               '<p style="margin:0 0 24px;color:#c0cbd7">An administrator invited this address. '
+               'Confirm only if you want to receive flight alerts.</p>'
+               + email_button("Confirm subscription", confirmation_url)
+               + '<p style="margin:18px 0 0;color:#c0cbd7;font-size:13px">'
+               'This confirmation link expires in <strong>48 hours</strong>. '
+               'If this invitation was unexpected, ignore it or use the unsubscribe link below. '
+               'No alerts will be sent until you confirm.</p>')
+    return subject, plain, render_message("Confirm your flight alerts", content, unsubscribe_url)
 
 
 def render_deal(payload: dict) -> tuple[str, str, str]:
@@ -144,28 +189,53 @@ def render_deal(payload: dict) -> tuple[str, str, str]:
     stops = offer.get("layovers", 0)
     if type(stops) is not int or not 0 <= stops <= 20:
         raise ValueError("Invalid stop count")
-    subject = f"[Flight deal] {origin} to {destination}: ${price:.0f} ({discount:.0f}% below baseline)"
+    subject = f"[Flight deal] {origin} to {destination}: {money(price)} ({percentage(discount)} below baseline)"
+    savings = average - price
     plain = (
-        f"{origin} to {city} ({destination})\nRoundtrip search fare: ${price:.2f} USD\n"
-        f"Baseline: ${average:.2f} USD ({baseline_source}); difference: {discount:.1f}%\n"
+        f"{origin} to {city} ({destination})\nRoundtrip search fare: {money(price)} USD\n"
+        f"Baseline: {money(average)} USD ({baseline_source}); difference: {percentage(discount)}\n"
+        f"Save {money(savings)} against this baseline.\n"
         f"Travel dates: {outbound} to {returning}\nAirlines ({scope}): {airline_names}\n"
         f"Layovers ({scope}): {stops}\nSource: {source}\nObserved: {observed}\n"
         f"Fare availability and conditions can change. Recheck with the provider.\nBook: {booking}\n"
     )
     def cell(label: str, value: str) -> str:
-        return '<tr><th style="text-align:left">' + html.escape(label) + '</th><td>' + html.escape(value) + '</td></tr>'
-    card = '<section><h2>' + html.escape(f"{origin} → {city} ({destination})") + '</h2><table>'
+        return ('<tr><th scope="row" width="35%" style="padding:12px 8px 12px 0;text-align:left;'
+                'vertical-align:top;border-bottom:1px solid #3a4959;color:#c0cbd7;font-size:14px">'
+                + html.escape(label) + '</th><td style="padding:12px 0;border-bottom:1px solid #3a4959;'
+                'color:#f3f7fb;font-size:14px;overflow-wrap:anywhere">' + html.escape(value) + '</td></tr>')
+    card = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+            'style="margin:0 0 28px"><tr><td>'
+            '<p style="margin:0 0 6px;color:#9fc5ff;font-size:12px;letter-spacing:1px;font-weight:bold">'
+            + html.escape(f"FLIGHT DEAL ALERT ({origin})")
+            + '</p><h2 style="margin:0 0 20px;font-size:26px;line-height:1.3;color:#ffffff">'
+            + html.escape(f"{origin} to {city} ({destination})") + '</h2>'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
+            '<td width="55%" valign="top" style="padding:0 12px 20px 0">'
+            '<p style="margin:0;color:#c0cbd7;font-size:14px">Roundtrip search fare · USD</p>'
+            '<p style="margin:4px 0;color:#7ad6ad;font-size:40px;line-height:1.2;font-weight:bold">'
+            + money(price) + '</p><p style="margin:8px 0 0;color:#c0cbd7;font-size:14px">'
+            'Baseline: <s style="text-decoration:line-through">' + money(average) + '</s></p></td>'
+            '<td width="45%" valign="top" style="padding-bottom:20px">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+            '<tr><td align="center" bgcolor="#0b7353" style="background-color:#0b7353;'
+            'border-radius:10px;padding:14px 8px;color:#ffffff;font-size:23px;font-weight:bold;line-height:1.3">'
+            'Save<br>' + percentage(discount) + '</td></tr></table>'
+            '<p style="margin:8px 0 0;color:#c0cbd7;text-align:center;font-size:13px">Save '
+            + money(savings) + ' off baseline</p></td></tr></table>'
+            '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">')
     for label, value in (
-        ("Roundtrip search fare", f"${price:.2f} USD"),
-        ("Baseline", f"${average:.2f} USD · {baseline_source}"),
-        ("Below baseline", f"{discount:.1f}%"),
-        ("Travel dates", f"{outbound} to {returning}"),
+        ("Route", f"{origin} → {destination} ({city})"),
+        ("Dates", f"{display_date(outbound)} to {display_date(returning)}"),
         (f"Airlines ({scope})", airline_names),
-        (f"Layovers ({scope})", str(stops)), ("Source", source), ("Observed", observed),
+        (f"Layovers ({scope})", str(stops)), ("Baseline source", baseline_source),
+        ("Source", source), ("Observed", observed_time(observed) if observed_time(observed) != "—" else observed),
     ):
         card += cell(label, value)
-    card += ('</table><p>Fare availability and conditions can change. Recheck with the provider.</p>'
-             '<p><a href="' + html.escape(booking, quote=True) + '">View fare with provider</a></p></section>')
+    card += ('</table><p style="margin:20px 0 16px;color:#c0cbd7;font-size:13px">'
+             'Fare availability and conditions can change. Recheck with the provider.</p>'
+             + email_button("View fare with provider", booking) + '</td></tr></table>')
+
     return subject, plain, card
 
 
