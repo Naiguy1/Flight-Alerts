@@ -133,6 +133,12 @@ class ScanService:
         blocked_providers = set()
         quota_providers = set()
         blocked = {term.lower() for term in filters["blocked_destinations"]}
+        durations = scanner["search_window"].get(
+            "sample_trip_durations_days",
+            scanner["search_window"].get("trip_durations_days", [scanner["search_window"].get("trip_duration_days", 7)])
+        )
+        if isinstance(durations, int):
+            durations = [durations]
         queries = []
         for origin in scanner["origins"]:
             for destination in config["monitored_destinations"]:
@@ -140,10 +146,11 @@ class ScanService:
                     continue
                 for offset in scanner["search_window"]["sample_departure_offsets_days"]:
                     outbound = today + timedelta(days=offset)
-                    queries.append(dict(origin=origin, destination=destination["code"],
-                                        destination_city=destination["city"], country_code=destination["country_code"],
-                                        outbound_date=outbound.isoformat(),
-                                        return_date=(outbound + timedelta(days=scanner["search_window"]["trip_duration_days"])).isoformat()))
+                    for duration in durations:
+                        queries.append(dict(origin=origin, destination=destination["code"],
+                                            destination_city=destination["city"], country_code=destination["country_code"],
+                                            outbound_date=outbound.isoformat(),
+                                            return_date=(outbound + timedelta(days=duration)).isoformat()))
         result.total_windows = len(queries)
         if not queries:
             return result

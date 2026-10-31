@@ -90,6 +90,27 @@ class ScannerTests(DatabaseFixture):
         self.assertEqual(len(self.db.dashboard_snapshot(["LHR"])["deliveries"]), 1)
         self.assertTrue(provider.closed)
 
+    def test_variable_trip_durations_generate_respective_queries(self):
+        cfg = configuration(offsets=(35,))
+        cfg["scanner"]["search_window"]["sample_trip_durations_days"] = [4, 7, 9]
+        self.db.save_config(cfg, self.db.get_config_version())
+        captured_queries = []
+        provider = Provider()
+        orig_fetch = provider.fetch_offers
+        def intercept(**query):
+            captured_queries.append(query)
+            return orig_fetch(**query)
+        provider.fetch_offers = intercept
+        result = self.service(provider).run()
+        self.assertTrue(result.success)
+        self.assertEqual(result.total_windows, 3)
+        self.assertEqual(len(captured_queries), 3)
+        return_dates = [q["return_date"] for q in captured_queries]
+        from datetime import date
+        outbound_dt = date.fromisoformat(captured_queries[0]["outbound_date"])
+        expected_returns = [(outbound_dt + timedelta(days=d)).isoformat() for d in [4, 7, 9]]
+        self.assertEqual(return_dates, expected_returns)
+
     def test_dry_run_does_not_change_history_alerts_or_deliveries(self):
         self.verified()
         result = self.service(Provider()).run(dry_run=True)

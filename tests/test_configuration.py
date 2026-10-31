@@ -70,6 +70,23 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_config(cfg)
         cfg = base_config()
+        cfg["scanner"]["search_window"]["sample_trip_durations_days"] = [0]
+        with self.assertRaises(ValueError):
+            validate_config(cfg)
+        cfg = base_config()
+        cfg["scanner"]["search_window"]["sample_trip_durations_days"] = [61]
+        with self.assertRaises(ValueError):
+            validate_config(cfg)
+        cfg = base_config()
+        cfg["scanner"]["search_window"]["sample_trip_durations_days"] = []
+        with self.assertRaises(ValueError):
+            validate_config(cfg)
+        cfg = base_config()
+        cfg["scanner"]["search_window"]["sample_trip_durations_days"] = [4, 5, 6, 7, 8, 9]
+        valid = validate_config(cfg)
+        self.assertEqual(valid["scanner"]["search_window"]["sample_trip_durations_days"], [4, 5, 6, 7, 8, 9])
+        self.assertEqual(valid["scanner"]["search_window"]["trip_duration_days"], 4)
+        cfg = base_config()
         cfg["filters"].update(digest_enabled=True, freshness_hours=6, digest_interval_hours=6)
         with self.assertRaises(ValueError):
             validate_config(cfg)

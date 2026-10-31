@@ -79,7 +79,24 @@ def validate_config(value: dict) -> dict:
         _number(item, "departure offset", window["min_days_ahead"], window["max_days_ahead"], integer=True)
         for item in offsets
     ))
-    window["trip_duration_days"] = _number(window.get("trip_duration_days", 7), "trip_duration_days", 1, 60, integer=True)
+    durations = window.get("sample_trip_durations_days")
+    if durations is None:
+        durations = window.get("trip_durations_days")
+    if durations is not None:
+        if isinstance(durations, (int, float)) and not isinstance(durations, bool):
+            durations = [durations]
+        if not isinstance(durations, list) or not 1 <= len(durations) <= 20:
+            raise ValueError("Configure between one and twenty trip durations")
+        validated_durations = sorted(set(
+            _number(item, "trip duration", 1, 60, integer=True)
+            for item in durations
+        ))
+        window["sample_trip_durations_days"] = validated_durations
+        window["trip_duration_days"] = validated_durations[0]
+    else:
+        duration = _number(window.get("trip_duration_days", 7), "trip_duration_days", 1, 60, integer=True)
+        window["trip_duration_days"] = duration
+        window["sample_trip_durations_days"] = [duration]
     filters = cfg.setdefault("filters", {})
     for name, default, low, high, integer in (
         ("discount_threshold_percent", 50, 1, 99, False),
