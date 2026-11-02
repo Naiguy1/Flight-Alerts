@@ -12,15 +12,17 @@ scanner:
     - 35
     - 60
     - 90
-    - 130
-    - 170
+    - 120
+    - 150
+    - 180
     sample_trip_durations_days:
     - 4
     - 8
+    - 12
     trip_duration_days: 8
   currency: USD
   provider_requests_per_minute: 30
-  provider_daily_budget: 1000
+  provider_daily_budget: 1200
   concurrency: 3
   request_timeout_seconds: 20
   scan_deadline_seconds: 7200
