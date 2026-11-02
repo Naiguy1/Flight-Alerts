@@ -21,3 +21,4 @@ backups/
 *.key
 tests/
 docs/
+*.gguf

@@ -10,46 +10,29 @@ scanner:
     max_days_ahead: 190
     sample_departure_offsets_days:
     - 35
-    - 50
-    - 65
-    - 80
-    - 95
-    - 110
+    - 60
+    - 90
     - 130
-    - 150
     - 170
-    - 190
     sample_trip_durations_days:
     - 4
-    - 5
-    - 6
-    - 7
     - 8
-    - 9
-    trip_duration_days: 7
+    trip_duration_days: 8
   currency: USD
-  provider_requests_per_minute: 10
+  provider_requests_per_minute: 30
   provider_daily_budget: 1000
   concurrency: 3
   request_timeout_seconds: 20
   scan_deadline_seconds: 7200
 filters:
   discount_threshold_percent: 50.0
-  deduplication_window_hours: 48
-  min_historical_samples_for_db_avg: 15
+  deduplication_window_hours: 24
+  min_historical_samples_for_db_avg: 500
   excluded_country_codes:
   - US
   allowed_domestic_airports:
   - BOS
-  - MCO
   - TPA
-  - RSW
-  - SDF
-  - LEX
-  - CVG
-  - SJU
-  - STT
-  - HNL
   blocked_destinations: []
   recipient_emails: []
   alerts_paused: false
@@ -61,30 +44,12 @@ filters:
   digest_interval_hours: 6
   quiet_hours: null
 monitored_destinations:
-- code: YYZ
-  city: Toronto
-  country_code: CA
-  baseline_avg_usd:
-    SLC: 480
-    LAS: 430
-- code: YVR
-  city: Vancouver
-  country_code: CA
-  baseline_avg_usd:
-    SLC: 420
-    LAS: 370
 - code: YUL
   city: Montreal
   country_code: CA
   baseline_avg_usd:
     SLC: 550
     LAS: 490
-- code: YYC
-  city: Calgary
-  country_code: CA
-  baseline_avg_usd:
-    SLC: 400
-    LAS: 350
 - code: MEX
   city: Mexico City
   country_code: MX
@@ -133,24 +98,6 @@ monitored_destinations:
   baseline_avg_usd:
     SLC: 950
     LAS: 880
-- code: LGW
-  city: London Gatwick
-  country_code: GB
-  baseline_avg_usd:
-    SLC: 900
-    LAS: 830
-- code: MAN
-  city: Manchester
-  country_code: GB
-  baseline_avg_usd:
-    SLC: 980
-    LAS: 910
-- code: EDI
-  city: Edinburgh
-  country_code: GB
-  baseline_avg_usd:
-    SLC: 1020
-    LAS: 950
 - code: KEF
   city: "Keflav\xEDk (Reykjavik)"
   country_code: IS
@@ -169,12 +116,6 @@ monitored_destinations:
   baseline_avg_usd:
     SLC: 1200
     LAS: 1100
-- code: CNX
-  city: Chiang Mai
-  country_code: TH
-  baseline_avg_usd:
-    SLC: 1250
-    LAS: 1150
 - code: TPE
   city: Taipei
   country_code: TW
@@ -193,14 +134,14 @@ monitored_destinations:
   baseline_avg_usd:
     SLC: 1680
     LAS: 1520
-- code: HND
-  city: Tokyo (Haneda)
-  country_code: JP
-  baseline_avg_usd:
-    SLC: 1250
-    LAS: 1100
 - code: NRT
   city: Tokyo (Narita)
+  country_code: JP
+  baseline_avg_usd:
+    SLC: 1200
+    LAS: 1050
+- code: KIX
+  city: Osaka
   country_code: JP
   baseline_avg_usd:
     SLC: 1200
@@ -259,45 +200,9 @@ monitored_destinations:
   baseline_avg_usd:
     SLC: 420
     LAS: 360
-- code: MCO
-  city: Orlando
-  country_code: US
-  baseline_avg_usd:
-    SLC: 390
-    LAS: 320
 - code: TPA
   city: Tampa
   country_code: US
   baseline_avg_usd:
     SLC: 390
     LAS: 320
-- code: RSW
-  city: Fort Myers
-  country_code: US
-  baseline_avg_usd:
-    SLC: 440
-    LAS: 380
-- code: SDF
-  city: Louisville
-  country_code: US
-  baseline_avg_usd:
-    SLC: 430
-    LAS: 370
-- code: LEX
-  city: Lexington
-  country_code: US
-  baseline_avg_usd:
-    SLC: 460
-    LAS: 400
-- code: CVG
-  city: Cincinnati / N. Kentucky
-  country_code: US
-  baseline_avg_usd:
-    SLC: 390
-    LAS: 330
-- code: HNL
-  city: Oahu
-  country_code: US
-  baseline_avg_usd:
-    SLC: 600.0
-    LAS: 550.0

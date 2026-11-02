@@ -38,7 +38,7 @@ class ConfigurationTests(unittest.TestCase):
         cfg = load_config(str(Path(__file__).resolve().parents[1] / "config.yaml"))
         self.assertEqual(cfg["filters"]["recipient_emails"], [])
         self.assertEqual(cfg["scanner"]["currency"], "USD")
-        self.assertEqual(len(cfg["monitored_destinations"]), 40)
+        self.assertEqual(len(cfg["monitored_destinations"]), 27)
 
     def test_normalization_never_mutates_callers_configuration(self):
         source = {"scanner": {"origins": ["slc", "SLC"]}, "filters": {"excluded_country_codes": []}}

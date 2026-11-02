@@ -19,3 +19,8 @@ backups/
 *.key
 pip-report*.json
 .aider*
+
+# Aider files
+.aider*
+*.gguf
+docker-compose.override.yml
