@@ -1,5 +1,5 @@
 # Official multi-architecture manifest verified in docker-library/repo-info.
-FROM python:3.12-alpine@sha256:5789aa194f757888f41fa3d48e14b6feaa1b57c0af0b56fcb1372d6474d3bff0 AS dependencies
+FROM python:3.15-alpine@sha256:20a82dbc2783112ddb91d1534603f802d222a3e63e593cd002eb2ac534e70211 AS dependencies
 WORKDIR /build
 COPY requirements.txt requirements-scraper.txt ./
 ARG INSTALL_SCRAPER=false
@@ -8,7 +8,7 @@ RUN python -m venv /opt/venv \
     && if [ "$INSTALL_SCRAPER" = "true" ]; then /opt/venv/bin/python -m pip install --no-cache-dir --require-hashes -r requirements-scraper.txt; fi \
     && /opt/venv/bin/python -m pip check
 
-FROM python:3.12-alpine@sha256:5789aa194f757888f41fa3d48e14b6feaa1b57c0af0b56fcb1372d6474d3bff0
+FROM python:3.15-alpine@sha256:20a82dbc2783112ddb91d1534603f802d222a3e63e593cd002eb2ac534e70211
 WORKDIR /app
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
