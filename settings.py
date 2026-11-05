@@ -186,6 +186,10 @@ def validate_config(value: dict) -> dict:
             for origin, price in baselines.items()
         }
         destination.pop("baseline_avg_USD", None)
+        # Adding a monitored US destination is an explicit domestic opt-in.
+        # Other country exclusions and the destination blocklist still apply.
+        if country == "US" and code not in filters["allowed_domestic_airports"]:
+            filters["allowed_domestic_airports"].append(code)
     return cfg
 
 

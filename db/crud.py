@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timedelta, timezone
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -206,6 +207,18 @@ class DatabaseManager:
             row = connection.execute("SELECT version FROM app_config WHERE id=1").fetchone()
             return row[0] if row else 0
 
+    def warn_config_drift(self, default_config: dict) -> bool:
+        """Keep dashboard edits authoritative, but make ignored YAML edits visible."""
+        from settings import validate_config
+        drifted = validate_config(self.get_config(default_config)) != validate_config(default_config)
+        if drifted:
+            logging.getLogger(__name__).warning(
+                "YAML differs from SQLite configuration version %d; SQLite settings remain active. "
+                "To import YAML explicitly, run python -m tools.sync_config",
+                self.get_config_version(),
+            )
+        return drifted
+
     def save_config(self, cfg: dict, expected_version: int) -> int:
         encoded = _json(cfg)
         with self._write() as connection:
@@ -250,8 +263,9 @@ class DatabaseManager:
         cutoff = _iso(_now() - timedelta(hours=max(0, float(window_hours))))
         row = connection.execute(
             "SELECT MIN(alerted_price_usd) FROM alert_logs WHERE origin=? AND destination=? "
+            "AND outbound_date=? AND return_date=? "
             "AND COALESCE(created_at,sent_at)>=? AND alerted_price_usd>0 AND alerted_price_usd<=10000000",
-            (origin, destination, cutoff),
+            (origin, destination, outbound_date, return_date, cutoff),
         ).fetchone()
         previous = row[0]
         if previous is None:
@@ -674,9 +688,12 @@ class DatabaseManager:
                     "FROM history GROUP BY origin,destination) "
                 )
                 recent = [dict(row) for row in connection.execute(
-                    history + ",latest AS (SELECT *,ROW_NUMBER() OVER ("
+                    history + ",batches AS (SELECT *,MAX(observed_jd) OVER ("
+                    "PARTITION BY origin,destination,outbound_date,return_date,recorded_at) "
+                    "AS batch_observed_jd FROM history),latest AS (SELECT *,ROW_NUMBER() OVER ("
                     "PARTITION BY origin,destination,outbound_date,return_date "
-                    "ORDER BY observed_jd DESC,id DESC) AS observation_rank FROM history) "
+                    "ORDER BY batch_observed_jd DESC,recorded_at DESC,price_usd ASC,id DESC) "
+                    "AS observation_rank FROM batches) "
                     "SELECT f.*,r.avg_price AS average_price_usd,r.samples,"
                     "(1.0-f.price_usd/r.avg_price)*100.0 AS discount_percent "
                     "FROM latest f JOIN route_averages r USING(origin,destination) "

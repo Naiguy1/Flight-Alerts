@@ -49,7 +49,7 @@ class DealEvaluator:
             and offer.destination_city.strip().lower() not in self.blocked_terms
             and bool(offer.country_code)
             and (offer.country_code not in self.excluded_countries
-                 or offer.destination in self.allowed_domestic_airports)
+                 or (offer.country_code == "US" and offer.destination in self.allowed_domestic_airports))
             and getattr(offer, "currency", "USD") == "USD"
             and isfinite(offer.price_usd)
             and offer.price_usd > 0

@@ -102,7 +102,9 @@ class FareRevalidator:
         for candidate in candidates:
             checked = datetime.fromisoformat(candidate.observed_at.replace("Z", "+00:00"))
             if (-30 <= (now - checked).total_seconds() <= 300
-                    and candidate.price_usd <= snapshot.price_usd and candidate.source == snapshot.source):
+                    and candidate.source == snapshot.source
+                    and all(getattr(candidate, key) == getattr(snapshot, key) for key in
+                            ("origin", "destination", "outbound_date", "return_date", "country_code"))):
                 valid.append(candidate)
         qualified = evaluator.evaluate_offers(valid)
         if not qualified:

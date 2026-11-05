@@ -86,8 +86,8 @@ class ScannerTests(DatabaseFixture):
         self.assertTrue(result.success)
         self.assertEqual((result.total_windows, result.windows, result.completed_windows), (2, 2, 2))
         self.assertEqual(result.observations, 2)
-        self.assertEqual(result.alerts_reserved, 1)
-        self.assertEqual(len(self.db.dashboard_snapshot(["LHR"])["deliveries"]), 1)
+        self.assertEqual(result.alerts_reserved, 2)
+        self.assertEqual(len(self.db.dashboard_snapshot(["LHR"])["deliveries"]), 2)
         self.assertTrue(provider.closed)
 
     def test_variable_trip_durations_generate_respective_queries(self):
@@ -140,7 +140,7 @@ class ScannerTests(DatabaseFixture):
         bad.name = "kiwi"
         scanner = ScanService(self.db, self.runtime, self.cfg, fetcher_factory=lambda cfg: [bad, good])
         result = scanner.run()
-        self.assertFalse(result.success)
+        self.assertTrue(result.success)
         self.assertEqual(result.provider_failures, 2)
         self.assertEqual(result.observations, 2)
         self.assertEqual(good.calls, 2)
@@ -294,10 +294,21 @@ class RevalidationTests(DatabaseFixture):
         self.assertEqual(first["offer"]["price_usd"], 150)
         self.assertEqual(first["discount_percent"], 85)
 
-    def test_unavailable_or_more_expensive_fare_is_not_sent(self):
-        provider = Provider(price=400)
+    def test_fare_that_no_longer_meets_threshold_is_not_sent(self):
+        provider = Provider(price=501)
         self.assertFalse(self.revalidator(provider)(self.payload(age=600)))
         self.assertEqual(provider.calls, 1)
+
+    def test_price_increase_still_qualifies_and_refreshes_payload(self):
+        provider = Provider(price=202)
+        payload = self.payload(age=600)
+        self.assertTrue(self.revalidator(provider)(payload))
+        self.assertEqual(payload["offer"]["price_usd"], 202)
+        self.assertAlmostEqual(payload["discount_percent"], 79.8)
+        self.assertEqual(payload["average_price_usd"], 1000)
+
+    def test_exact_threshold_is_accepted(self):
+        self.assertTrue(self.revalidator(Provider(price=500))(self.payload(age=600)))
 
     def test_slow_requery_uses_updated_time_for_fresh_observation(self):
         now = [datetime.now(timezone.utc)]

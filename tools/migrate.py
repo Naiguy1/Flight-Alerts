@@ -7,6 +7,7 @@ def main() -> None:
     runtime = RuntimeSettings.from_env()
     database = DatabaseManager(runtime.database_url)
     database.get_config(load_config(runtime.config_path))
+    database.warn_config_drift(load_config(runtime.config_path))
     if not database.health().get("ready", False):
         raise SystemExit("Database migration readiness check failed")
     print("Database schema and configuration initialized")

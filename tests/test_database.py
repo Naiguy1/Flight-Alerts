@@ -338,7 +338,8 @@ class AlertAndDeliveryTests(DatabaseCase):
         self.assertIsNotNone(self.db.reserve_alert(fare(400), 1000, 60))
         self.assertIsNone(self.db.reserve_alert(fare(390), 1000, 61))
         self.assertIsNotNone(self.db.reserve_alert(fare(360), 1000, 64))
-        self.assertIsNone(self.db.reserve_alert(fare(355, offset=60), 1000, 64.5))
+        self.assertIsNotNone(self.db.reserve_alert(fare(355, offset=60), 1000, 64.5))
+        self.assertIsNone(self.db.reserve_alert(fare(350, offset=60), 1000, 65))
         self.assertIsNotNone(self.db.reserve_alert(fare(300, offset=60), 1000, 70))
 
     def test_expired_or_stolen_scan_lease_cannot_create_alert_intent(self):
