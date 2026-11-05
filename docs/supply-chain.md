@@ -26,7 +26,7 @@ The Docker official-image metadata was inspected for the actual build inputs:
 The first image scan rejected the earlier Python slim/stock Caddy images because
 of high-severity OS and Go dependency findings. Those images are no longer build
 inputs. `Dockerfile.proxy` rebuilds the fixed
-[Caddy v2.11.7 module](https://github.com/caddyserver/caddy/tree/v2.11.7) with
+[Caddy v2.11.9 module](https://github.com/caddyserver/caddy/tree/v2.11.9) with
 [x/net v0.62.0](https://github.com/golang/net/tree/v0.62.0) and Go 1.27.3. Go module
 downloads are verified through the public checksum database, and `go mod verify`
 runs before a read-only build. The compiled static binary carries its module
@@ -110,3 +110,28 @@ backport with an accepted security assessment is required before release.
 
 The external Caddy guide preserves the separately managed existing proxy; it
 does not assess that container's version or assert that its dependencies are safe.
+
+
+## JOSE dependency migration candidate (2026-11-05)
+
+The audit-fix image build reproduced the blocking JOSE v3 finding on
+`8a3be8d838bb4dd531e6dd4b2e75e3780df10bdc`. The application image had no
+vulnerabilities; the proxy retained HIGH CVE-2026-116587 and two medium JOSE v3
+findings. Upgrading only v4 does not repair callers compiled against v3.
+
+Smallstep merged its API migration to JOSE v4 in
+[PR #2848](https://github.com/smallstep/certificates/pull/2848) on 2026-11-05.
+The author commit's upstream stable/oldstable builds, tests, vulnerability scan,
+and CodeQL passed. The proxy candidate pins the merged upstream commit
+`6d5a251fbe010383c93ead1ab451a329986b80ca`, rather than a floating branch or a
+v3-to-v4 module replacement, together with `go.step.sm/crypto v0.92.0` and
+`go-jose/v4 v4.1.9`. The certificates migration has no tagged release yet; the
+exact merged commit is an explicit prerelease dependency for reviewer assessment.
+Caddy is updated to the released `v2.11.9`, retaining the pinned Go/base images.
+
+The builder and CI graph assessment reject any JOSE v3 package or descendant,
+in addition to OpenPGP packages. Runtime module metadata remains intact and
+unchanged Trivy HIGH/CRITICAL gates must pass on the final candidate. Existing
+restricted-runtime Caddy validation and the real upstream-outage privacy probe
+exercise the new binary. Check the final Image job and its bounded diagnostic
+for the actual result; upstream tests alone do not establish our build passes.
