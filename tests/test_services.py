@@ -310,6 +310,17 @@ class RevalidationTests(DatabaseFixture):
     def test_exact_threshold_is_accepted(self):
         self.assertTrue(self.revalidator(Provider(price=500))(self.payload(age=600)))
 
+    def test_policy_edit_during_requery_is_applied_before_accepting_fare(self):
+        provider = Provider()
+        original = provider.fetch_offers
+        def fetch(**query):
+            changed = configuration()
+            changed["filters"]["discount_threshold_percent"] = 90
+            self.db.save_config(changed, self.db.get_config_version())
+            return original(**query)
+        provider.fetch_offers = fetch
+        self.assertFalse(self.revalidator(provider)(self.payload(age=600)))
+
     def test_slow_requery_uses_updated_time_for_fresh_observation(self):
         now = [datetime.now(timezone.utc)]
         payload = self.payload(age=600)

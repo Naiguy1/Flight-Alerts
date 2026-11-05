@@ -190,6 +190,8 @@ def validate_config(value: dict) -> dict:
         # Other country exclusions and the destination blocklist still apply.
         if country == "US" and code not in filters["allowed_domestic_airports"]:
             filters["allowed_domestic_airports"].append(code)
+    if len(filters["allowed_domestic_airports"]) > 200:
+        raise ValueError("At most 200 domestic airports may be allowed, including monitored airports")
     return cfg
 
 

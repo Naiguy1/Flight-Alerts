@@ -98,6 +98,11 @@ class FareRevalidator:
                         self.db.release_lease(lease_name, lease)
             candidates = [FlightOffer(**offer) for offer in cached]
         now = self.clock()
+        # A provider request can outlive a dashboard policy edit.
+        config = validate_config(self.db.get_config(self.default_config))
+        if snapshot.destination not in {item["code"] for item in config["monitored_destinations"]}:
+            return False
+        evaluator = evaluator_for(self.db, config)
         valid = []
         for candidate in candidates:
             checked = datetime.fromisoformat(candidate.observed_at.replace("Z", "+00:00"))
