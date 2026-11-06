@@ -195,6 +195,9 @@ class FastFlightsScraper(FlightFetcher):
         self.budget_callback = budget_callback
         self.worker_runner = worker_runner or _run_subprocess
 
+    def close(self) -> None:
+        """Each search owns its subprocess; no persistent session needs closing."""
+
     @staticmethod
     def _parse_price(price_raw):
         # Avoid stripping arbitrary punctuation and turning locale-formatted

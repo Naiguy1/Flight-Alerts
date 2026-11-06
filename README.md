@@ -1,84 +1,51 @@
 # Flight-Alerts
 
-Flight-Alerts is a tool that helps you find cheap flights by watching prices and sending you email alerts when a fare meets your deal settings. You can run it on your own computer or server, and manage it through a password-protected website.
+Flight-Alerts watches flight prices and emails verified subscribers when fares
+meet your configured deal threshold. It runs on one host with a password-protected
+HTTPS dashboard, a worker, and a persistent SQLite database.
 
-## Getting Started
+## Set up or upgrade
 
-To get started with Flight-Alerts, you'll need to follow these steps:
+- **New installation:** follow the [beginner setup guide](docs/getting-started.md).
+  It covers the supported Linux amd64 host, DNS/TLS, `.env`, mounted secrets,
+  provider credentials, and `docker compose up -d --build`.
+- **Existing installation:** use the [upgrade guide](docs/deployment.md#preserve-existing-deployments)
+  to preserve your database and verified subscribers.
+- **Existing Caddy:** follow the [external Caddy guide](docs/existing-caddy.md).
+- **Use the dashboard:** see [settings, subscriptions, and scans](docs/using-flight-alerts.md).
 
-### Step 1: Install Git and Docker
+The repository already includes `docker-compose.yml`. The dashboard is served at
+`PUBLIC_BASE_URL` over HTTPS. SMTP credentials and `SERPAPI_API_KEY` / `KIWI_API_KEY`
+are mounted as secrets; the optional direct scraper requires both its build and
+runtime flags. Configure an API fallback when enabling the scraper.
 
-Before you can install Flight-Alerts, you'll need to install Git and Docker on your computer. Here's how:
+Mutable settings live in SQLite after the first startup. Startup warns if YAML
+and SQLite differ. Review existing dashboard settings before intentionally
+importing YAML with `docker compose exec flight_worker python -m tools.sync_config`.
 
-* **Windows:**
-	1. Download and install [Git for Windows](https://gitforwindows.org/).
-	2. Download and install [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop).
-* **Mac:**
-	1. Open the Terminal app on your Mac. You can find it in the Applications/Utilities folder, or use Spotlight to search for it.
-	2. Run the following command to install Git: `brew install git`
-	3. Run the following command to install Docker: `brew install --cask docker`
-* **Linux:**
-	1. Open the Terminal app on your Linux computer.
-	2. Run the following command to install Git: `sudo apt-get install git`
-	3. Run the following command to install Docker: `sudo apt-get install docker.io`
+## Validation and launch
 
-### Step 2: Clone the Flight-Alerts Repository
+Use Python 3.12 with the locked development environment:
 
-Once you have Git and Docker installed, you can clone the Flight-Alerts repository. Here's how:
+```bash
+python -m pip install --require-hashes -r requirements-dev.txt
+python -m tools.verify_lock
+python -m ruff check .
+python -m pytest -q
+python -m tools.backup self-test
+python -m pip check
+```
 
-* **Windows:**
-	1. Open the Git Bash terminal.
-	2. Run the following command: `git clone https://github.com/Naiguy1/Flight-Alerts.git`
-* **Mac/Linux:**
-	1. Open the Terminal app.
-	2. Run the following command: `git clone https://github.com/Naiguy1/Flight-Alerts.git`
+All final-commit CI gates and the production sign-offs in the
+[report resolution and launch checklist](docs/report-resolution.md) must pass
+before launch. Production credentials, TLS operation, and recovery of the real
+production database require checks on the deployment host.
 
-### Step 3: Create a Docker Compose File
+## Further reading
 
-Next, you'll need to create a Docker Compose file to configure your Flight-Alerts installation. Here's how:
-
-* **All platforms:**
-	1. Open the Terminal app.
-	2. Navigate to the Flight-Alerts directory: `cd Flight-Alerts`
-	3. Run the following command to create a Docker Compose file: `cp docker-compose.yml.example docker-compose.yml`
-
-### Step 4: Configure Your Flight-Alerts Installation
-
-Now you'll need to configure your Flight-Alerts installation. Here's how:
-
-* **All platforms:**
-	1. Open the `docker-compose.yml` file in a text editor.
-	2. Update the `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, and `SMTP_PASSWORD` variables to match your email settings.
-	3. Update the `FARE_PROVIDER_API_KEY` variable to match your fare provider API key.
-	4. Save the file.
-
-### Step 5: Start Flight-Alerts
-
-Finally, you can start Flight-Alerts. Here's how:
-
-* **All platforms:**
-	1. Open the Terminal app.
-	2. Navigate to the Flight-Alerts directory: `cd Flight-Alerts`
-	3. Run the following command to start Flight-Alerts: `docker compose up -d`
-
-That's it! Flight-Alerts should now be up and running. You can access the dashboard by visiting `http://localhost:8080` in your web browser.
-
-## Troubleshooting
-
-If you encounter any issues during the setup process, here are some troubleshooting tips:
-
-* Make sure you have the latest version of Git and Docker installed.
-* Check that you have cloned the Flight-Alerts repository correctly.
-* Verify that your Docker Compose file is configured correctly.
-* Check the Flight-Alerts logs for any error messages.
-
-## Further Reading
-
-For more information on Flight-Alerts, including technical details and advanced configuration options, please see the following documents:
-
-* [Architecture and limitations](docs/architecture.md)
-* [Production readiness](docs/production-readiness.md)
-* [Maintainer merge procedure](docs/merging.md)
-* [Security policy](SECURITY.md)
-
-We hope this helps! If you have any questions or need further assistance, don't hesitate to ask.
+- [Architecture and limitations](docs/architecture.md)
+- [Production readiness](docs/production-readiness.md)
+- [Operations and recovery](docs/operations.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Maintainer merge procedure](docs/merging.md)
+- [Security policy](SECURITY.md)

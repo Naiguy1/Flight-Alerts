@@ -22,6 +22,7 @@ from tools.ci_sbom_report import inventory, proxy_assessment
 
 REPOSITORY = "Naiguy1/Flight-Alerts"
 BRANCHES = {"refs/heads/main", "refs/heads/production-hardening",
+            "refs/heads/fix/report-launch-readiness",
             "refs/heads/fix/dashboard-90-day-deals-and-form-origin"}
 MAX_TEXT = 20_000
 

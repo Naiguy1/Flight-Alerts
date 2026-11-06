@@ -42,6 +42,16 @@ configured targets remain operator assumptions, not verified market averages.
 Observed fares can expire. The dashboard filters old/past-departure offers and
 has no deals when there are no active destinations. Material price improvements
 can create a new alert during the cooldown according to configured thresholds.
+Cooldowns apply to exact departure and return dates, so distinct itineraries
+remain eligible. All eligible returned prices contribute to history; the
+dashboard chooses the cheapest fare from the latest search batch.
+
+Departure sampling rotates inside calendar partitions rather than repeatedly
+querying fixed offsets. The scraper is tried first when enabled, followed by
+paid providers only on failure or no eligible offers. A healthy fallback can
+complete a query even when the primary reports errors. Provider budgets are
+independent; capacity warnings and job-order rotation expose and reduce quota
+starvation, but finite sampling cannot promise every fare will be found.
 
 Query fanout is bounded by provider budgets, concurrency, request/scan deadlines,
 and typed failure outcomes. Missing credentials disable providers. Healthy
@@ -63,7 +73,7 @@ identity/authorization appropriate to multiple administrators or tenants.
 The application image uses a digest-pinned official CPython 3.12 Alpine runtime.
 Exact Python dependency versions retain reviewed glibc and musllinux wheel hashes;
 no source-package build is permitted during runtime dependency installation. The
-proxy is rebuilt from the fixed Caddy v2.11.7 module using a pinned Go 1.27.3
+proxy is rebuilt from the fixed Caddy v2.11.9 module using a pinned Go 1.27.3
 builder and x/net v0.62.0. Go verifies module downloads with the public checksum
 database. Runtime proxy layers contain the static binary, certificates and timezone
 data rather than the upstream image's unrelated curl/brotli tools. Actual image

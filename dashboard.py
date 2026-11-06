@@ -253,6 +253,7 @@ def create_app(runtime=None, database=None) -> FastAPI:
         application.state.default_config = load_config(effective.config_path)
         application.state.db = database if database is not None else DatabaseManager(effective.database_url)
         application.state.db.get_config(application.state.default_config)
+        application.state.db.warn_config_drift(application.state.default_config)
         try:
             yield
         finally:

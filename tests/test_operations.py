@@ -155,7 +155,8 @@ class SupplyChainTests(unittest.TestCase):
         self.assertIn("CGO_ENABLED=0", proxy_image)
         self.assertIn("COPY --from=builder /out/caddy /usr/bin/caddy", proxy_image)
         self.assertIn("golang.org/x/net@v0.62.0", proxy_image)
-        self.assertIn("github.com/go-jose/go-jose/v4@v4.1.6", proxy_image)
+        self.assertIn("github.com/go-jose/go-jose/v4@v4.1.9", proxy_image)
+        self.assertIn("github.com/smallstep/certificates@6d5a251fbe010383c93ead1ab451a329986b80ca", proxy_image)
         self.assertIn("request delete", (ROOT / "docs/Caddyfile").read_text())
         self.assertIn("chmod 0700 /data/caddy /config/caddy", proxy_image)
 
@@ -238,7 +239,9 @@ class SupplyChainTests(unittest.TestCase):
                 proxy_assessment(path)
             for contents in ("", "golang.org/x/crypto/ssh\n",
                              "github.com/caddyserver/caddy/v2/cmd/caddy\ngolang.org/x/crypto/openpgp\n",
-                             "github.com/caddyserver/caddy/v2/cmd/caddy\ngolang.org/x/crypto/openpgp/packet\n"):
+                             "github.com/caddyserver/caddy/v2/cmd/caddy\ngolang.org/x/crypto/openpgp/packet\n",
+                             "github.com/caddyserver/caddy/v2/cmd/caddy\ngithub.com/go-jose/go-jose/v3\n",
+                             "github.com/caddyserver/caddy/v2/cmd/caddy\ngithub.com/go-jose/go-jose/v3/jwt\n"):
                 path.write_text(contents)
                 with self.subTest(contents=contents), self.assertRaises(ValueError):
                     proxy_assessment(path)

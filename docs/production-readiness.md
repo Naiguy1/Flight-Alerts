@@ -1,5 +1,9 @@
 # Production readiness
 
+For the 2026-11-05 report findings, fixes, and outstanding host checks, see
+[report resolution](report-resolution.md). Historical CI evidence below applies
+only to its recorded commits.
+
 **New to the project?** The [setup guide](getting-started.md) explains installation,
 and [Using Flight-Alerts](using-flight-alerts.md) explains the dashboard. This is
 the operator's sign-off record: a place to write down which real-world checks

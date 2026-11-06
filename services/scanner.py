@@ -22,6 +22,21 @@ def route_baselines(destinations: list[dict]) -> dict[str, dict[str, float]]:
     return {item["code"]: item["baseline_avg_usd"] for item in destinations}
 
 
+def departure_offsets(window: dict, phase: int) -> list[int]:
+    """Rotate one date per partition across the entire configured calendar.
+
+    Midpoints partition the window around the configured samples. Unlike a
+    seven-day jitter, cycling each partition can reach dates in the gaps too.
+    Phase zero preserves the configured samples and request volume.
+    """
+    samples = window["sample_departure_offsets_days"]
+    edges = [window["min_days_ahead"]]
+    edges.extend((left + right) // 2 + 1 for left, right in zip(samples, samples[1:]))
+    edges.append(window["max_days_ahead"] + 1)
+    return [start + (sample - start + phase) % (end - start)
+            for sample, start, end in zip(samples, edges, edges[1:])]
+
+
 def evaluator_for(db, config: dict) -> DealEvaluator:
     filters = config["filters"]
     return DealEvaluator(
@@ -59,15 +74,15 @@ def build_fetchers(runtime, config: dict, db, *, budgets=None, stop_event=None, 
     providers = []
     allowed = provider_names if provider_names is not None else {"serpapi", "kiwi", "scraper"}
     try:
+        if runtime.enable_scraper and "scraper" in allowed:
+            from fetcher.fast_flights_scraper import FastFlightsScraper
+            providers.append(FastFlightsScraper(budget_callback=budget("scraper"), **options))
         if runtime.serpapi_api_key and "serpapi" in allowed:
             from fetcher.google_flights import GoogleFlightsFetcher
             providers.append(GoogleFlightsFetcher(runtime.serpapi_api_key, budget_callback=budget("serpapi"), **options))
         if runtime.kiwi_api_key and "kiwi" in allowed:
             from fetcher.secondary_aggregator import KiwiTequilaFetcher
             providers.append(KiwiTequilaFetcher(runtime.kiwi_api_key, budget_callback=budget("kiwi"), **options))
-        if runtime.enable_scraper and "scraper" in allowed:
-            from fetcher.fast_flights_scraper import FastFlightsScraper
-            providers.append(FastFlightsScraper(budget_callback=budget("scraper"), **options))
         return providers
     except BaseException:
         for provider in providers:
@@ -92,7 +107,7 @@ class ScanResult:
     @property
     def success(self) -> bool:
         return (self.total_windows > 0 and self.windows == self.total_windows
-                and self.completed_windows == self.total_windows and self.provider_failures == 0
+                and self.completed_windows == self.total_windows
                 and not self.deadline_reached and not self.canceled and not self.providers_disabled)
 
     @property
@@ -133,18 +148,25 @@ class ScanService:
         blocked_providers = set()
         quota_providers = set()
         blocked = {term.lower() for term in filters["blocked_destinations"]}
+        query_evaluator = evaluator_for(self.db, config)
         durations = scanner["search_window"].get(
             "sample_trip_durations_days",
             scanner["search_window"].get("trip_durations_days", [scanner["search_window"].get("trip_duration_days", 7)])
         )
         if isinstance(durations, int):
             durations = [durations]
+        phase = job["id"] - 1 if job else today.toordinal()
+        offsets = departure_offsets(scanner["search_window"], phase)
         queries = []
         for origin in scanner["origins"]:
             for destination in config["monitored_destinations"]:
                 if destination["code"] == origin or destination["code"].lower() in blocked or destination["city"].lower() in blocked:
                     continue
-                for offset in scanner["search_window"]["sample_departure_offsets_days"]:
+                if destination["country_code"] in filters["excluded_country_codes"] and not (
+                        destination["country_code"] == "US"
+                        and destination["code"] in filters["allowed_domestic_airports"]):
+                    continue
+                for offset in offsets:
                     outbound = today + timedelta(days=offset)
                     for duration in durations:
                         queries.append(dict(origin=origin, destination=destination["code"],
@@ -154,6 +176,16 @@ class ScanService:
         result.total_windows = len(queries)
         if not queries:
             return result
+        # Budgets are per provider, not one shared budget. Retries and delivery
+        # rechecks also spend them, so this is a lower-bound planning warning.
+        daily_windows = math.ceil(24 / scanner["scan_interval_hours"]) * len(queries)
+        capacity = min(scanner["provider_daily_budget"],
+                       scanner["scan_deadline_seconds"] * scanner["provider_requests_per_minute"] / 60)
+        if len(queries) > capacity or daily_windows > scanner["provider_daily_budget"]:
+            logger.warning("scan_capacity_insufficient", extra={"category": "partial_coverage_expected",
+                           "offers": len(queries)})
+        if self.runtime.enable_scraper and not (self.runtime.serpapi_api_key or self.runtime.kiwi_api_key):
+            logger.warning("scraper_has_no_api_fallback", extra={"category": "provider_redundancy_missing"})
         # Rotate coverage between persisted scan jobs when a daily cap prevents
         # a whole scan. A route at the end cannot be permanently starved.
         stride = 97
@@ -170,6 +202,7 @@ class ScanService:
                 local.fetchers = (self.fetcher_factory(config) if self.fetcher_factory else
                                   build_fetchers(self.runtime, config, self.db, budgets=self.budgets,
                                                  stop_event=self.stop_event, deadline=deadline, heartbeat=self.heartbeat))
+                local.fetchers = sorted(local.fetchers, key=lambda provider: getattr(provider, "name", "") != "scraper")
                 with guard:
                     created.extend(local.fetchers)
             offers, successes, failures = [], 0, 0
@@ -182,7 +215,6 @@ class ScanService:
                 with guard:
                     unavailable = name in blocked_providers
                 if unavailable:
-                    failures += 1
                     continue
                 started = self.clock()
                 try:
@@ -192,6 +224,10 @@ class ScanService:
                     offers.extend(found)
                     self.db.record_provider_result(name, True, latency_ms=round((self.clock() - started) * 1000), offers=len(found))
                     successes += 1
+                    # Use paid providers only when the earlier source has no
+                    # eligible offers for this exact query or fails.
+                    if any(query_evaluator.is_eligible_route(offer) for offer in found):
+                        break
                 except Exception as exc:
                     category = getattr(exc, "category", "provider_operation_failed")
                     if category in _PERMANENT_FOR_SCAN:
@@ -236,7 +272,7 @@ class ScanService:
                         continue
                     offers, successes, failures, disabled = future.result()
                     result.windows += 1
-                    result.completed_windows += int(successes > 0 and failures == 0)
+                    result.completed_windows += int(successes > 0)
                     result.provider_successes += successes
                     result.provider_failures += failures
                     result.providers_disabled = result.providers_disabled or disabled
@@ -256,11 +292,11 @@ class ScanService:
                             live_evaluator = evaluator_for(self.db, live)
                             active = {item["code"] for item in live["monitored_destinations"]}
                             deals = live_evaluator.evaluate_offers(offers)
-                            cheapest = min((offer for offer in offers if live_evaluator.is_eligible_route(offer)
-                                            and offer.destination in active), key=lambda offer: offer.price_usd, default=None)
-                            if cheapest is not None:
-                                self.db.record_offers([cheapest])
-                                result.observations += 1
+                            observations = [offer for offer in offers if live_evaluator.is_eligible_route(offer)
+                                            and offer.destination in active]
+                            if observations:
+                                self.db.record_offers(observations)
+                                result.observations += len(observations)
                             if not live["filters"]["alerts_paused"]:
                                 for deal in deals:
                                     if deal.offer.destination not in active:

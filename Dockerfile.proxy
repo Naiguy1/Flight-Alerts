@@ -4,11 +4,11 @@ FROM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01b
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org
 WORKDIR /build
 RUN go mod init flight-alerts-proxy \
-    && go get github.com/caddyserver/caddy/v2/cmd/caddy@v2.11.7 golang.org/x/net@v0.62.0 github.com/go-chi/chi/v5@v5.4.0 github.com/go-jose/go-jose/v4@v4.1.6 \
+    && go get github.com/caddyserver/caddy/v2/cmd/caddy@v2.11.9 golang.org/x/net@v0.62.0 github.com/go-chi/chi/v5@v5.5.0 github.com/go-jose/go-jose/v4@v4.1.9 github.com/smallstep/certificates@6d5a251fbe010383c93ead1ab451a329986b80ca go.step.sm/crypto@v0.92.0 \
     && go mod verify \
     && mkdir -p /out \
     && go list -mod=readonly -deps github.com/caddyserver/caddy/v2/cmd/caddy > /out/proxy-packages.txt \
-    && if grep -Eq '^golang.org/x/crypto/openpgp(/|$)' /out/proxy-packages.txt; then echo 'Unsafe OpenPGP dependency detected'; exit 1; fi \
+    && if grep -Eq '^(golang.org/x/crypto/openpgp|github.com/go-jose/go-jose/v3)(/|$)' /out/proxy-packages.txt; then echo 'Unsafe OpenPGP or JOSE v3 dependency detected'; exit 1; fi \
     && go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/caddy github.com/caddyserver/caddy/v2/cmd/caddy \
     && go version -m /out/caddy
 

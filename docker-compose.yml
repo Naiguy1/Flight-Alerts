@@ -17,6 +17,11 @@ x-app: &app
   pids_limit: 128
   mem_limit: 512m
   cpus: 1.0
+  logging: &bounded-logging
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
   volumes:
     - flight_data:/app/data
   environment: &common-env
@@ -92,6 +97,7 @@ services:
       retries: 3
 
   proxy:
+    logging: *bounded-logging
     image: flight-alerts-proxy:local
     build:
       context: .

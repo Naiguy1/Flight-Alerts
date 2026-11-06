@@ -44,6 +44,7 @@ def main(argv=None) -> int:
         db = DatabaseManager(runtime.database_url)
         try:
             validate_config(db.get_config(defaults))
+            db.warn_config_drift(defaults)
             heartbeat = Heartbeat(os.getenv("WORKER_HEARTBEAT_PATH", "data/worker-heartbeat.json"))
             if args.dry_run:
                 cfg = validate_config(db.get_config(defaults))

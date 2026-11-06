@@ -69,8 +69,12 @@ def proxy_assessment(path: Path) -> str:
     if any(package == "golang.org/x/crypto/openpgp"
            or package.startswith("golang.org/x/crypto/openpgp/") for package in packages):
         raise ValueError("Unmaintained OpenPGP package is linked into the proxy")
+    if any(package == "github.com/go-jose/go-jose/v3"
+           or package.startswith("github.com/go-jose/go-jose/v3/") for package in packages):
+        raise ValueError("Vulnerable JOSE v3 package is linked into the proxy")
     return (f"GO-2026-5932 applicability: affected OpenPGP packages absent from {len(packages)} "
             "proxy build dependencies. Module-level scanner finding remains visible.\n"
+            "Vulnerable JOSE v3 packages absent from proxy build dependencies.\n"
             "Proxy dependency graph SHA256: " + hashlib.sha256(raw).hexdigest())
 
 
