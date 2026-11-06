@@ -135,7 +135,7 @@ class SecurityMiddleware:
 
 def _redirect(message: str) -> RedirectResponse:
     # Fixed message codes keep personal data out of redirects, browser history and access logs.
-    return RedirectResponse("/?notice=" + message, status_code=303)
+    return RedirectResponse("/admin?notice=" + message, status_code=303)
 
 
 def _origin(request: Request) -> None:
@@ -291,6 +291,7 @@ def create_app(runtime=None, database=None) -> FastAPI:
     admin = APIRouter(dependencies=[Depends(_admin)])
 
     @admin.get("/", response_class=HTMLResponse)
+    @admin.get("/admin", response_class=HTMLResponse)
     @admin.get("/history", response_class=HTMLResponse)
     @admin.get("/providers", response_class=HTMLResponse)
     def index(request: Request, notice: str = ""):
@@ -302,6 +303,7 @@ def create_app(runtime=None, database=None) -> FastAPI:
         token = request.app.state.csrf.issue("admin")
         messages = {"saved": "Settings saved.", "invited": "Verification email queued; confirmation is required before alerts.", "confirmed": "This recipient is already confirmed.", "disabled": "Recipient disabled.", "queued": "Work queued for the worker.", "busy": "A scan is already queued, running, or in its cooldown period.", "watch": "Flight watch saved.", "removed": "Item removed."}
         response = HTMLResponse(TEMPLATES.get_template("dashboard.html").render(
+            active_tab="deals" if request.url.path == "/" else "admin",
             cfg=cfg, config_version=version, csrf_token=token, snapshot=snapshot,
             recipients=request.app.state.db.list_recipients(), watches=request.app.state.db.list_watched_flights(),
             notice=messages.get(notice, ""),

@@ -34,7 +34,7 @@ class DisplayFormattingTests(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec("jinja2"), "Jinja2 is required")
 class DashboardRenderingTests(unittest.TestCase):
-    def render(self, **snapshot):
+    def render(self, active_tab="deals", **snapshot):
         from jinja2 import Environment, FileSystemLoader, select_autoescape
         environment = Environment(loader=FileSystemLoader(Path(__file__).resolve().parents[1] / "web/templates"),
                                   autoescape=select_autoescape(["html"], default=True))
@@ -47,7 +47,7 @@ class DashboardRenderingTests(unittest.TestCase):
                                         "baseline_avg_usd": {"SLC": 326.53}}]}
         return environment.get_template("dashboard.html").render(
             cfg=cfg, snapshot=snapshot, recipients=[], watches=[], notice="", csrf_token="synthetic-csrf",
-            config_version=7)
+            config_version=7, active_tab=active_tab)
 
     def test_cards_round_every_price_and_preserve_form_security_and_links(self):
         output = self.render(recent_deals=[{
@@ -64,20 +64,24 @@ class DashboardRenderingTests(unittest.TestCase):
         self.assertIn('aria-label="55.3% below the 90-day route average"', output)
         self.assertIn('class="fare-price">$146</strong>', output)
         self.assertIn('90-day average $327">$327</s>', output)
-        self.assertIn("$1,338", output)
-        self.assertIn("SLC $327", output)
         self.assertNotIn("1338.266", output)
         self.assertNotIn("$146.00", output)
         self.assertNotIn("<script>", output)
         self.assertIn("&lt;script&gt;", output)
-        self.assertIn('name="csrf_token" value="synthetic-csrf"', output)
-        self.assertIn('name="config_version" value="7"', output)
-        self.assertIn('action="/scan" method="post"', output)
-        self.assertIn('action="/settings" method="post"', output)
         self.assertIn('rel="noopener noreferrer"', output)
+
+        admin_output = self.render(active_tab="admin", route_stats=[{
+            "origin": "LAS", "destination": "AKL", "samples": 15, "avg_price": 1338.26666666667}])
+        self.assertIn("$1,338", admin_output)
+        self.assertIn("SLC $327", admin_output)
+        self.assertNotIn("1338.266", admin_output)
+        self.assertIn('name="csrf_token" value="synthetic-csrf"', admin_output)
+        self.assertIn('name="config_version" value="7"', admin_output)
+        self.assertIn('action="/scan" method="post"', admin_output)
+        self.assertIn('action="/settings" method="post"', admin_output)
 
     def test_empty_state_and_no_history_are_readable(self):
         output = self.render()
         self.assertIn("No matching deals right now", output)
         self.assertIn("0 matching fares", output)
-        self.assertIn("No route history.", output)
+        self.assertIn("No route history.", self.render(active_tab="admin"))

@@ -151,7 +151,7 @@ class WebTests(unittest.TestCase):
         self.auth = ("admin", self.password)
 
     def csrf(self):
-        response = self.client.get("/", auth=self.auth)
+        response = self.client.get("/admin", auth=self.auth)
         self.assertEqual(response.status_code, 200, response.text)
         return re.search(r'name="csrf_token" value="([^"]+)"', response.text).group(1)
 
@@ -162,7 +162,8 @@ class WebTests(unittest.TestCase):
                                 headers={"Origin": "https://testserver"}, follow_redirects=False)
 
     def test_anonymous_administrative_routes_are_closed(self):
-        self.assertEqual(self.client.get("/").status_code, 401)
+        for path in ("/", "/admin", "/history", "/providers"):
+            self.assertEqual(self.client.get(path).status_code, 401, path)
         for path in ("/scan", "/emails/add", "/emails/test", "/airports/add", "/blocklist/add", "/watches/add", "/settings"):
             self.assertIn(self.client.post(path, data={}).status_code, (401, 429), path)
         self.assertEqual(self.db.list_recipients(), [])
@@ -189,7 +190,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
 
     def test_browser_form_policy_and_origin_checks_for_scan_and_settings(self):
-        response = self.client.get("/", auth=self.auth)
+        response = self.client.get("/admin", auth=self.auth)
         # no-referrer can turn browser POST Origin into null; strict-origin
         # retains the origin without exposing signed URLs or query strings.
         self.assertEqual(response.headers["referrer-policy"], "strict-origin")
@@ -206,12 +207,38 @@ class WebTests(unittest.TestCase):
             self.assertEqual(result.status_code, 303, result.text)
 
     def test_manual_scan_is_queued_once_globally(self):
-        self.assertEqual(self.post("/scan").status_code, 303)
+        first = self.post("/scan")
+        self.assertEqual(first.status_code, 303)
+        self.assertEqual(first.headers["location"], "/admin?notice=queued")
+        landing = self.client.get(first.headers["location"], auth=self.auth)
+        self.assertIn('href="/admin" aria-current="page"', landing.text)
+        self.assertIn("Work queued for the worker.", landing.text)
         response = self.post("/scan")
         self.assertEqual(response.status_code, 303)
         self.assertIn("notice=busy", response.headers["location"])
         jobs = self.db.dashboard_snapshot([]).get("jobs", [])
         self.assertEqual(len(jobs), 1)
+
+    def test_deals_and_admin_navigation_show_separate_content(self):
+        deals = self.client.get("/", auth=self.auth)
+        self.assertEqual(deals.status_code, 200)
+        self.assertIn('href="/" aria-current="page">Deals</a>', deals.text)
+        self.assertIn('href="/admin">Admin</a>', deals.text)
+        self.assertIn('id="fares"', deals.text)
+        self.assertNotIn('<form', deals.text)
+        for path in ("/admin", "/history", "/providers"):
+            with self.subTest(path=path):
+                admin = self.client.get(path, auth=self.auth)
+                self.assertEqual(admin.status_code, 200)
+                self.assertIn('href="/admin" aria-current="page">Admin</a>', admin.text)
+                self.assertNotIn('id="fares"', admin.text)
+                for section in ("scans", "observations", "settings", "recipients", "airports",
+                                "watches", "providers", "history"):
+                    self.assertIn(f'id="{section}"', admin.text)
+                self.assertIn('action="/scan" method="post"', admin.text)
+                self.assertIn('name="csrf_token"', admin.text)
+                self.assertIn('name="config_version"', admin.text)
+                self.assertIn("default-src 'none'", admin.headers["content-security-policy"])
 
     def test_recipient_requires_confirmation_and_invitation_queues_delivery(self):
         response = self.post("/emails/add", {"email": "recipient@example.com"})
@@ -258,7 +285,7 @@ class WebTests(unittest.TestCase):
         self.assertNotIn(attack, response.text)
         response = self.post("/airports/add", {"code": "DUB", "city": attack, "country_code": "IE", "slc_baseline": "800", "las_baseline": "720", "config_version": self.db.get_config_version()})
         self.assertEqual(response.status_code, 303)
-        response = self.client.get("/", auth=self.auth)
+        response = self.client.get("/admin", auth=self.auth)
         self.assertNotIn(attack, response.text)
         self.assertIn("&lt;img", response.text)
 
@@ -276,7 +303,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 413)
 
     def test_host_tls_cookie_and_response_security_controls(self):
-        response = self.client.get("/", auth=self.auth)
+        response = self.client.get("/admin", auth=self.auth)
         self.assertIn("frame-ancestors 'none'", response.headers["content-security-policy"])
         self.assertEqual(response.headers["x-content-type-options"], "nosniff")
         self.assertEqual(response.headers["referrer-policy"], "strict-origin")
@@ -341,7 +368,7 @@ class WebTests(unittest.TestCase):
         job = self.db.claim_scan()
         self.assertEqual(job["id"], job_id)
         self.db.finish_scan(job_id, job["lease_token"], False, error="incomplete_coverage")
-        response = self.client.get("/", auth=self.auth)
+        response = self.client.get("/admin", auth=self.auth)
         self.assertEqual(response.status_code, 200)
         self.assertIn("authentication_failed", response.text)
         self.assertIn("incomplete_coverage", response.text)
@@ -354,7 +381,7 @@ class WebTests(unittest.TestCase):
 
     def test_internal_failures_have_only_safe_category_and_correlation(self):
         with patch.object(self.db, "list_recipients", side_effect=RuntimeError("smtp-password-or-stack-secret")):
-            response = self.client.get("/", auth=self.auth)
+            response = self.client.get("/admin", auth=self.auth)
         self.assertEqual(response.status_code, 500)
         self.assertNotIn("secret", response.text)
         self.assertEqual(response.json()["detail"], "Request failed")
@@ -372,7 +399,7 @@ class WebTests(unittest.TestCase):
         from fastapi.testclient import TestClient
         app = create_app(replace(self.runtime, public_base_url="https://TESTSERVER:443/"), self.db)
         with TestClient(app, base_url="https://testserver", raise_server_exceptions=False, follow_redirects=False) as client:
-            response = client.get("/", auth=self.auth)
+            response = client.get("/admin", auth=self.auth)
             self.assertEqual(response.status_code, 200)
             token = re.search(r'name="csrf_token" value="([^"]+)"', response.text).group(1)
             self.assertEqual(client.post("/scan", auth=self.auth, data={"csrf_token": token},

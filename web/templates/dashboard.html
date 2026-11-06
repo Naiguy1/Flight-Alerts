@@ -3,13 +3,15 @@
 {%- endmacro %}
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Flight Alerts administration</title><link rel="stylesheet" href="/assets/app.css"></head>
+{% set is_admin = active_tab == 'admin' %}
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ 'Admin' if is_admin else 'Deals' }} · Flight Alerts</title><link rel="stylesheet" href="/assets/app.css"></head>
 <body><header><div class="brand"><span class="brand-mark" aria-hidden="true">↗</span><div><h1>Flight Alerts</h1><small>Your flight monitoring dashboard</small></div></div>
-<form action="/scan" method="post">{{ form_fields() }}<button type="submit">Queue a scan</button></form></header>
-<nav aria-label="Dashboard sections"><a href="#fares">Flight deals</a><a href="#settings">Delivery</a><a href="#recipients">Recipients</a><a href="#airports">Airports</a><a href="#watches">Flight status</a><a href="#providers">Provider health</a><a href="#history">Jobs &amp; delivery history</a></nav>
+</header>
+<nav aria-label="Dashboard tabs"><a href="/"{% if not is_admin %} aria-current="page"{% endif %}>Deals</a><a href="/admin"{% if is_admin %} aria-current="page"{% endif %}>Admin</a></nav>
 {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
 <main>
 {% set filters = cfg.filters %}
+{% if not is_admin %}
 <section id="fares" aria-labelledby="fares-heading">
 <div class="section-heading"><div><p class="eyebrow">Worth a closer look</p><h2 id="fares-heading">Exceptional fares, in one place</h2><p>Flights at least 50% below their route’s 90-day average.</p></div><span class="count">{{ snapshot.get('recent_deals',[])|length }} matching fares · USD</span></div>
 <div class="fare-grid">
@@ -25,7 +27,11 @@
 {% else %}<div class="empty-state"><strong>No matching deals right now</strong>No fares are at least 50% below their route’s rolling 90-day average. More route history may be needed.</div>{% endfor %}
 </div>
 <details class="methodology"><summary>How these deals are selected</summary><p>We show up to 12 upcoming itineraries, using the latest observed price for each one. Each price is compared with all valid USD observations for its route in the last 90 days, including that latest price and past travel dates. Provider estimates and configured baselines are not used here. Delivery age settings do not filter this list. Prices may have changed since observation.</p></details>
-<h3 class="history-title">Latest reserved alerts</h3><p class="muted">A reserved alert is not proof that every recipient received it. Delivery outcomes appear below.</p>
+</section>
+{% else %}
+<section id="scans" aria-labelledby="scans-heading"><div class="section-heading"><div><p class="eyebrow">Administration</p><h2 id="scans-heading">Scans and configuration</h2><p>Manage monitoring, delivery settings, and scan activity.</p></div><form action="/scan" method="post">{{ form_fields() }}<button type="submit">Queue a scan</button></form></div></section>
+<section id="observations"><h2>Alerts and route observations</h2>
+<h3>Latest reserved alerts</h3><p class="muted">A reserved alert is not proof that every recipient received it. Delivery outcomes appear in the history below.</p>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table><thead><tr><th>Created (UTC)</th><th>Route</th><th>Fare</th><th>Discount</th><th>Baseline source</th></tr></thead><tbody>{% for alert in snapshot.get('alerts',[]) %}<tr><td>{{ alert.get('created_at',alert.get('sent_at',''))|observed_time }}</td><td>{{ alert.origin }} → {{ alert.destination }}</td><td>{{ alert.get('alerted_price_usd')|money }}</td><td><span class="discount">{{ alert.get('discount_percent')|percentage }}</span></td><td>{{ alert.get('baseline_source','') }}</td></tr>{% else %}<tr><td colspan="5">No reserved alerts.</td></tr>{% endfor %}</tbody></table></div>
 <h3>Rolling 90-day route observations</h3><p class="muted">These statistics use all valid USD observations in the last 90 days, including past travel dates. Each reserved alert records its own baseline source separately.</p><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table><thead><tr><th>Route</th><th>Samples</th><th class="numeric">90-day average (USD)</th></tr></thead><tbody>{% for stat in snapshot.get('route_stats',[]) %}<tr><td>{{ stat.origin }} → {{ stat.destination }}</td><td>{{ stat.get('samples',stat.get('count','')) }}</td><td class="numeric">{{ stat.get('avg_price',stat.get('average_price_usd'))|money }}</td></tr>{% else %}<tr><td colspan="3">No route history.</td></tr>{% endfor %}</tbody></table></div></section>
 
@@ -68,4 +74,5 @@
 <section id="history"><h2>Scan jobs and delivery history</h2><h3>Scan jobs</h3><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table><thead><tr><th>Job</th><th>State</th><th>Created (UTC)</th><th>Last heartbeat (UTC)</th><th>Safe error category</th></tr></thead><tbody>{% for job in snapshot.get('jobs',[]) %}<tr><td>{{ job.id }}</td><td>{{ job.get('status',job.get('state','')) }}</td><td>{{ job.get('created_at','')|observed_time }}</td><td>{{ job.get('heartbeat_at')|observed_time if job.get('heartbeat_at') else 'Not started' }}</td><td>{{ job.get('last_error','') }}</td></tr>{% else %}<tr><td colspan="5">No scan jobs.</td></tr>{% endfor %}</tbody></table></div>
 <h3>Per-recipient deliveries</h3><div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable data table"><table><thead><tr><th>Delivery</th><th>Kind</th><th>Recipient</th><th>State / attempts</th><th>Safe error category</th></tr></thead><tbody>{% for delivery in snapshot.get('deliveries',[]) %}<tr><td>{{ delivery.id }}</td><td>{{ delivery.kind }}</td><td>{{ delivery.get('email',delivery.get('recipient_id','')) }}</td><td>{{ delivery.get('status',delivery.get('state','')) }} · {{ delivery.get('attempts',0) }}</td><td>{{ delivery.get('last_error','') }}</td></tr>{% else %}<tr><td colspan="5">No delivery attempts.</td></tr>{% endfor %}</tbody></table></div>
 <p class="muted">SMTP uses at least once delivery. A timeout after mail acceptance may produce a duplicate on retry. The worker records outcomes and applies bounded retries.</p></section>
+{% endif %}
 </main><footer>All prices in USD. Observed fares may change before booking.</footer></body></html>

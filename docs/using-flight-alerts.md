@@ -14,9 +14,17 @@ The dashboard uses browser HTTP Basic authentication and has no separate sign-ou
 button. A browser may keep that login until its authenticated browsing session
 ends. Use a private browser session on a shared computer and close it afterward.
 
+## Dashboard tabs
+
+The dashboard opens on **Deals**, showing current flight deals and how they are
+selected. Choose **Admin** for delivery settings, recipients, monitored airports,
+flight status watches, provider health, scan jobs, and delivery history. The
+**Queue a scan** button is also in Admin. Both tabs require the same administrator
+login. After submitting an Admin form, you return to Admin with a status message.
+
 ## Confirm a recipient
 
-1. Open **Recipients** in the top navigation.
+1. Open **Admin** and find **Recipient subscriptions**.
 2. Enter your own address and choose **Send invitation** for the first trial.
 3. Open the email, follow its confirmation link, and submit the confirmation form.
 4. Reload the dashboard. Expect **Confirmed** and **Enabled** for that recipient.
@@ -30,7 +38,8 @@ choice or offer a re-enable button.
 
 ## Set the delivery rules
 
-Open **Delivery**, change settings, then choose **Save delivery settings**.
+In **Admin**, find **Alert and delivery controls**, change settings, then choose
+**Save delivery settings**.
 Reload the page if another tab has already saved newer settings.
 
 | Setting | Meaning and example |
@@ -60,7 +69,7 @@ backup restore because its previous delivery may be uncertain.
 
 ## Add destinations
 
-In **Airports**, enter the destination's three-letter IATA airport code, city,
+In **Admin**, under **Monitored airports**, enter the destination's three-letter IATA airport code, city,
 and two-letter country code. For example, London Heathrow is `LHR` in `GB`.
 Choose **Add or update** to save it. A blocklist entry matches an exact airport
 code or city, ignoring case; it is not a country or substring filter.
@@ -83,7 +92,7 @@ monitored airports produces no new fare searches.
 
 ## Queue a scan and understand the result
 
-**Queue a scan** saves a job for the worker. It does not search inside the browser
+In **Admin**, **Queue a scan** saves a job for the worker. It does not search inside the browser
 request. The worker also creates scheduled jobs on its configured interval.
 An already queued/running scan or the manual cooldown can prevent another job.
 
@@ -132,7 +141,7 @@ receive that message. It does not create a qualifying fare when there is none.
 ## Watch a specific flight (optional)
 
 Flight-status watches need a configured Aviationstack key and an eligible account.
-In **Flight status**, enter a flight number such as `DL123` and its departure
+In **Admin**, under **Flight status watches**, enter a flight number such as `DL123` and its departure
 date, then choose **Watch flight**. The first successful observation sets a
 starting point; later status/delay/gate changes can create alerts for confirmed
 recipients. **Stop watching** removes the watch.
