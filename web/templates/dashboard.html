@@ -49,6 +49,7 @@
 <label>Start hour<input type="number" name="quiet_start" value="{{ quiet.get('start',22) }}" min="0" max="23"></label>
 <label>End hour<input type="number" name="quiet_end" value="{{ quiet.get('end',7) }}" min="0" max="23"></label>
 <label>Timezone<input name="quiet_timezone" value="{{ quiet.get('timezone','America/Denver') }}" maxlength="80"></label>
+<label class="check"><input type="checkbox" name="weekly_newsletter_enabled" {% if filters.get('weekly_newsletter_enabled') %}checked{% endif %}>Weekly best deals recap (Mondays, 15:00 UTC)</label>
 <label class="check"><input type="checkbox" name="digest_enabled" {% if filters.get('digest_enabled') %}checked{% endif %}>Group fare alerts into digests</label>
 <label>Digest interval (hours)<input type="number" name="digest_interval_hours" value="{{ filters.get('digest_interval_hours',6) }}" min="1" max="168"></label>
 </fieldset><button type="submit">Save delivery settings</button></form>

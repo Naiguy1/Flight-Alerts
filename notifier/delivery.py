@@ -1,6 +1,7 @@
 """Durable per-recipient notification processing with quiet hours and digests."""
 from __future__ import annotations
 
+import html
 import logging
 from collections import defaultdict
 from collections.abc import Callable
@@ -145,6 +146,13 @@ class DeliveryService:
                     self._cancel([row], "fare_expired")
                     continue
             elif kind == "digest":
+                if row["payload"].get("weekly") is True:
+                    end = _utc_datetime(row["payload"]["week_end"])
+                    if now >= end + timedelta(days=7, hours=15):
+                        self._cancel([row], "newsletter_expired")
+                        continue
+                    current.append(row)
+                    continue
                 items = row["payload"].get("deals", [])
                 if not isinstance(items, list) or len(items) > 100:
                     raise ValueError("Invalid digest payload")
@@ -191,6 +199,13 @@ class DeliveryService:
             if not payloads or len(payloads) > 100:
                 raise ValueError("Invalid digest payload")
             rendered = [render_deal(payload) for payload in payloads]
+            if rows[0]["payload"].get("weekly") is True:
+                period = rows[0]["payload"]["week_start"] + " to " + rows[0]["payload"]["week_end"]
+                notice = "Best fares observed " + period + ". Historical prices; availability and prices may have changed."
+                subject = "Flight Alerts: weekly best deals"
+                plain = notice + "\n\n" + "\n\n".join(item[1] for item in rendered) + "\nUnsubscribe: " + unsubscribe
+                body = "<p>" + html.escape(notice) + "</p>" + "".join(item[2] for item in rendered)
+                return subject, plain, render_message("This week's best deals", body, unsubscribe), unsubscribe
             subject = rendered[0][0] if len(rendered) == 1 else f"Flight deal digest: {len(rendered)} fares"
             plain = "\n\n".join(item[1] for item in rendered) + "\nUnsubscribe: " + unsubscribe + "\n"
             return subject, plain, render_message("Your flight deal" if len(rendered) == 1 else "Your flight deal digest", "".join(item[2] for item in rendered), unsubscribe), unsubscribe
@@ -203,6 +218,9 @@ class DeliveryService:
         if (not recipient or not recipient.get("enabled")
                 or (kind != "verification" and not recipient.get("verified"))):
             self._cancel(rows, "recipient_disabled")
+            return 0
+        if isinstance(rows[0]["payload"], dict) and rows[0]["payload"].get("weekly") is True and not filters.get("weekly_newsletter_enabled", False):
+            self._cancel(rows, "newsletter_disabled")
             return 0
         if kind == "verification" and recipient.get("verified"):
             self._cancel(rows, "already_verified")
@@ -233,7 +251,7 @@ class DeliveryService:
                 if remaining > 0:
                     self._defer(rows, remaining + 1)
                     return 0
-        if self.revalidate is not None and kind in {"deal", "digest"}:
+        if self.revalidate is not None and kind in {"deal", "digest"} and rows[0]["payload"].get("weekly") is not True:
             approved = []
             claimed = list(rows)
             for row in rows:
@@ -303,6 +321,9 @@ class DeliveryService:
                 self._cancel(rows, "already_verified")
                 return 0
             latest_filters = self.config_getter().get("filters", {})
+            if rows[0]["payload"].get("weekly") is True and not latest_filters.get("weekly_newsletter_enabled", False):
+                self._cancel(rows, "newsletter_disabled")
+                return 0
             if kind != "verification":
                 if latest_filters.get("alerts_paused", False):
                     self._defer(rows, 60)

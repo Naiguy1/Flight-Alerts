@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -107,6 +108,15 @@ class Worker:
             return None
         return future
 
+    def schedule_newsletter(self, config, *, now=None):
+        if not config["filters"].get("weekly_newsletter_enabled", False) or config["filters"]["alerts_paused"]:
+            return 0
+        current = now or datetime.now(timezone.utc)
+        end = (current - timedelta(days=current.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        if current >= end + timedelta(hours=15):
+            return self.db.enqueue_weekly_newsletter(end, current)
+        return 0
+
     def tick(self):
         if self.stop_event.is_set() or self._closed:
             return
@@ -127,6 +137,7 @@ class Worker:
             self._next_status = now + 300
         # One message/digest at a time prevents a slow recipient consuming every
         # other recipient's lease. Other services continue in independent futures.
+        self.schedule_newsletter(cfg)
         self.delivery.process_pending(limit=1)
         self.heartbeat.beat()
         if now >= self._next_cleanup:

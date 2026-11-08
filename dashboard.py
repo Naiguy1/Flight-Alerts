@@ -366,19 +366,20 @@ def create_app(runtime=None, database=None) -> FastAPI:
 
     @admin.post("/settings", dependencies=[Depends(_admin_csrf)])
     def settings(request: Request, config_version: int = Form(...), threshold: float = Form(...),
-                 freshness_hours: int = Form(...), alerts_paused: str = Form(""), digest_enabled: str = Form(""),
+                 freshness_hours: int = Form(...), alerts_paused: str = Form(""), digest_enabled: str = Form(""), weekly_newsletter_enabled: str = Form(""),
                  digest_interval_hours: int = Form(6), quiet_enabled: str = Form(""), quiet_start: int = Form(22),
                  quiet_end: int = Form(7), quiet_timezone: str = Form("America/Denver"),
                  price_improvement_usd: float | None = Form(None),
                  price_improvement_percent: float | None = Form(None),
                  deduplication_window_hours: int | None = Form(None),
                  scan_interval_hours: int | None = Form(None)):
-        if any(value not in {"", "on"} for value in (alerts_paused, digest_enabled, quiet_enabled)):
+        if any(value not in {"", "on"} for value in (alerts_paused, digest_enabled, weekly_newsletter_enabled, quiet_enabled)):
             raise HTTPException(422, "Invalid checkbox value")
         def mutate(cfg):
             filters = cfg.setdefault("filters", {})
             filters.update(discount_threshold_percent=threshold, freshness_hours=freshness_hours,
                            alerts_paused=alerts_paused == "on", digest_enabled=digest_enabled == "on",
+                           weekly_newsletter_enabled=weekly_newsletter_enabled == "on",
                            digest_interval_hours=digest_interval_hours)
             filters["quiet_hours"] = {"start": quiet_start, "end": quiet_end, "timezone": quiet_timezone} if quiet_enabled == "on" else None
             for name, value in (
