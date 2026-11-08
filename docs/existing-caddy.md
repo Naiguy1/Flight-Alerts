@@ -5,6 +5,30 @@ uses the already-restored Flight-Alerts database volume. Back up your current
 Caddyfile and local Compose overrides before editing. Do not restore the old
 database again or rerun first-time configuration seeding to apply this change.
 
+## Access from devices with changing IP addresses
+
+Visitors can use the configured HTTPS hostname from any client IP address,
+subject to the host's firewall and network access rules. Switching Wi-Fi,
+using mobile data, or receiving a new public IP does not require a Compose
+update.
+
+Uvicorn's `--forwarded-allow-ips` setting identifies the proxy allowed to supply
+forwarded client and HTTPS headers. Keep it set to Caddy's fixed internal
+address, `172.30.80.2`. Do not add visitors' IP addresses or replace the value
+with `*`, which would trust forwarded headers from every source that can reach
+the application.
+
+If the site returns `{"detail": "HTTPS required", ...}`, check that Caddy is
+connected to `flight-alerts_app` at `172.30.80.2`, the web command still trusts
+that address, and Caddy sends the HTTPS headers shown below. Remove a conflicting
+local `flight_web.command` override while preserving other settings. Follow
+the connection and web recreation steps below; an already connected Caddy
+requires inspecting its current address before changing its network attachment.
+
+These settings must be applied to the deployment host. Updating this repository
+alone does not modify the existing Caddy Compose project or the Git-ignored
+`docker-compose.override.yml`.
+
 ## Connect Caddy using a stable, dedicated address
 
 The default web command trusts forwarded HTTPS headers only from `172.30.80.2`.
