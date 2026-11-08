@@ -43,6 +43,7 @@ production database require checks on the deployment host.
 
 ## Further reading
 
+- [Weekly best deals newsletter](docs/weekly-newsletter.md)
 - [Architecture and limitations](docs/architecture.md)
 - [Production readiness](docs/production-readiness.md)
 - [Operations and recovery](docs/operations.md)

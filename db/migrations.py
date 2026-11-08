@@ -2,7 +2,7 @@
 from pathlib import Path
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 MIGRATION_DIRECTORY = Path(__file__).resolve().parents[1] / "migrations"
 
 
@@ -81,4 +81,7 @@ def migrate(connection: sqlite3.Connection, now: str) -> None:
                 connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
         _script(connection, "003_cache.sql")
         connection.execute("INSERT INTO schema_migrations VALUES (?,?)", (3, now))
+    if 4 not in applied:
+        _script(connection, "004_weekly.sql")
+        connection.execute("INSERT INTO schema_migrations VALUES (?,?)", (4, now))
     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")

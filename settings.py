@@ -109,7 +109,7 @@ def validate_config(value: dict) -> dict:
         ("digest_interval_hours", 6, 1, 168, True),
     ):
         filters[name] = _number(filters.get(name, default), name, low, high, integer=integer)
-    for name in ("alerts_paused", "digest_enabled"):
+    for name in ("alerts_paused", "digest_enabled", "weekly_newsletter_enabled"):
         filters[name] = _boolean(filters.get(name, False), name)
     if filters["digest_enabled"] and filters["digest_interval_hours"] >= filters["freshness_hours"]:
         raise ValueError("Digest interval must be shorter than fare freshness")

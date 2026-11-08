@@ -316,6 +316,11 @@ class DatabaseManager:
             config_row = connection.execute("SELECT value_json FROM app_config WHERE id=1").fetchone()
             if config_row and json.loads(config_row[0]).get("filters", {}).get("alerts_paused", False):
                 return None
+            payload = {"offer": offer, "average_price_usd": average_price,
+                       "discount_percent": float(discount_percent), "baseline_source": baseline_source}
+            connection.execute(
+                "INSERT INTO weekly_deals(observed_at,origin,destination,price_usd,payload) VALUES(?,?,?,?,?)",
+                (_iso(datetime.fromisoformat(offer["observed_at"]).astimezone(timezone.utc).replace(tzinfo=None)), offer["origin"], offer["destination"], offer["price_usd"], _json(payload)))
             recipients = connection.execute("SELECT id FROM recipients WHERE enabled=1 AND verified=1").fetchall()
             if not recipients:
                 return None
@@ -422,6 +427,38 @@ class DatabaseManager:
     def enqueue_notification(self, recipient_id: int, kind: str, payload: dict, idempotency_key: str) -> bool:
         with self._write() as connection:
             return self._enqueue(connection, recipient_id, kind, payload, idempotency_key, _iso())
+
+    def enqueue_weekly_newsletter(self, week_end: datetime, now: datetime) -> int:
+        """Atomically snapshot one completed week and enqueue once per subscriber."""
+        week_end = week_end.replace(tzinfo=timezone.utc) if week_end.tzinfo is None else week_end.astimezone(timezone.utc)
+        week_end = week_end.replace(tzinfo=None)
+        now = now.replace(tzinfo=timezone.utc) if now.tzinfo is None else now.astimezone(timezone.utc)
+        now = now.replace(tzinfo=None)
+        start = week_end - timedelta(days=7)
+        with self._write() as connection:
+            if connection.execute("SELECT 1 FROM weekly_runs WHERE week_end=?", (_iso(week_end),)).fetchone():
+                return 0
+            rows = connection.execute(
+                "SELECT payload FROM weekly_deals WHERE observed_at>=? AND observed_at<? "
+                "ORDER BY price_usd ASC, observed_at DESC,id DESC", (_iso(start), _iso(week_end))).fetchall()
+            best = {}
+            for row in rows:
+                payload = json.loads(row[0])
+                offer = payload["offer"]
+                if offer["outbound_date"] < now.date().isoformat():
+                    continue
+                best.setdefault((offer["origin"], offer["destination"]), payload)
+            deals = list(best.values())[:10]
+            count = 0
+            if deals:
+                payload = {"weekly": True, "week_start": start.date().isoformat(),
+                           "week_end": week_end.date().isoformat(), "deals": deals}
+                recipients = connection.execute("SELECT id FROM recipients WHERE enabled=1 AND verified=1").fetchall()
+                for recipient in recipients:
+                    count += self._enqueue(connection, recipient[0], "digest", payload,
+                        f"weekly:{week_end.date().isoformat()}:{recipient[0]}", _iso(now))
+            connection.execute("INSERT INTO weekly_runs VALUES (?,?)", (_iso(week_end), _iso(now)))
+            return count
 
     def claim_deliveries(self, limit: int = 20, lease_seconds: int = 300, digest_mode: bool = False) -> list[dict]:
         limit = min(100, max(1, int(limit)))
@@ -721,6 +758,7 @@ class DatabaseManager:
             removed = 0
             for table, predicate in (
                 ("price_history", "recorded_at<?"),
+                ("weekly_deals", "observed_at<?"),
                 ("deliveries", "created_at<? AND status IN ('sent','failed','canceled')"),
                 ("alert_logs", "created_at<? AND NOT EXISTS (SELECT 1 FROM deliveries WHERE alert_id=alert_logs.id)"),
                 ("scan_jobs", "created_at<? AND status IN ('succeeded','failed')"),
