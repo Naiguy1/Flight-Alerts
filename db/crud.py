@@ -428,6 +428,20 @@ class DatabaseManager:
         with self._write() as connection:
             return self._enqueue(connection, recipient_id, kind, payload, idempotency_key, _iso())
 
+    def record_weekly_offers(self, offers: list, *, scan_job_id: int | None = None,
+                             scan_lease_token: str | None = None) -> None:
+        """Keep every eligible observed fare, independently of instant-alert policy."""
+        normalized = [_offer_dict(offer) for offer in offers]
+        with self._write() as connection:
+            if not self._owns_scan(connection, scan_job_id, scan_lease_token, _iso()):
+                return
+            connection.executemany(
+                "INSERT INTO weekly_deals(observed_at,origin,destination,price_usd,payload) VALUES(?,?,?,?,?)",
+                [(_iso(datetime.fromisoformat(offer["observed_at"]).astimezone(timezone.utc).replace(tzinfo=None)),
+                  offer["origin"], offer["destination"], offer["price_usd"], _json({"offer": offer}))
+                 for offer in normalized],
+            )
+
     def enqueue_weekly_newsletter(self, week_end: datetime, now: datetime) -> int:
         """Atomically snapshot one completed week and enqueue once per subscriber."""
         week_end = week_end.replace(tzinfo=timezone.utc) if week_end.tzinfo is None else week_end.astimezone(timezone.utc)
@@ -440,13 +454,13 @@ class DatabaseManager:
                 return 0
             rows = connection.execute(
                 "SELECT payload FROM weekly_deals WHERE observed_at>=? AND observed_at<? "
-                "ORDER BY price_usd ASC, observed_at DESC,id DESC", (_iso(start), _iso(week_end))).fetchall()
+                "ORDER BY price_usd ASC, observed_at DESC,"
+                "(json_extract(payload,'$.average_price_usd') IS NOT NULL) DESC,id DESC",
+                (_iso(start), _iso(week_end))).fetchall()
             best = {}
             for row in rows:
                 payload = json.loads(row[0])
                 offer = payload["offer"]
-                if offer["outbound_date"] < now.date().isoformat():
-                    continue
                 best.setdefault((offer["origin"], offer["destination"]), payload)
             deals = list(best.values())[:10]
             count = 0
@@ -527,6 +541,9 @@ class DatabaseManager:
         connection.execute("UPDATE deliveries SET status=?,sent_at=?,last_error=?,next_attempt_at=?,lease_token=NULL,lease_expires_at=NULL WHERE id=?",
                            (status, now if success else None, "" if success else _error(error),
                             _iso(_now() + timedelta(seconds=max(0, int(retry_after_seconds)))), delivery_id))
+        # Measure the next window from the final outcome, including slow SMTP
+        # acknowledgments. A digest's shared lease updates its slots together.
+        connection.execute("UPDATE destination_alert_sends SET attempted_at=? WHERE lease_token=?", (now, lease_token))
         return True
 
     def update_delivery(self, delivery_id: int, lease_token: str, success: bool, error: str = "",
@@ -536,6 +553,55 @@ class DatabaseManager:
 
     def renew_delivery(self, delivery_id: int, lease_token: str, lease_seconds: int = 300) -> bool:
         return self.renew_delivery_group([delivery_id], lease_token, lease_seconds)
+
+    def reserve_destination_alerts(
+        self, delivery_ids: list[int], lease_token: str, destinations: set[str],
+    ) -> set[str] | None:
+        """Atomically admit a live email: 72h spacing and <=2 per rolling 7d.
+
+        One email spends one slot per destination, regardless of itinerary count
+        or origin. A lost lease returns None. Reservations survive crashes and
+        uncertain SMTP acceptance, conservatively preventing retry spam.
+        """
+        if not delivery_ids or len(delivery_ids) > 100 or len(set(delivery_ids)) != len(delivery_ids):
+            return None
+        destinations = {value.strip().upper() for value in destinations}
+        if not destinations or any(not re.fullmatch(r"[A-Z]{3}", value) for value in destinations):
+            raise ValueError("invalid alert destination")
+        with self._write() as connection:
+            now = _now()
+            placeholders = ",".join("?" for _ in delivery_ids)
+            rows = connection.execute(
+                f"SELECT recipient_id FROM deliveries WHERE id IN ({placeholders}) "
+                "AND status='sending' AND lease_token=? AND lease_expires_at>?",
+                (*delivery_ids, lease_token, _iso(now)),
+            ).fetchall()
+            if len(rows) != len(delivery_ids) or len({row[0] for row in rows}) != 1:
+                return None
+            recipient_id = rows[0][0]
+            allowed = set()
+            for destination in sorted(destinations):
+                count, latest = connection.execute(
+                    "SELECT COUNT(*),MAX(attempted_at) FROM destination_alert_sends "
+                    "WHERE recipient_id=? AND destination=? AND attempted_at>?",
+                    (recipient_id, destination, _iso(now - timedelta(days=7))),
+                ).fetchone()
+                if count >= 2 or (latest and datetime.fromisoformat(latest).replace(tzinfo=None) > now - timedelta(hours=72)):
+                    continue
+                connection.execute(
+                    "INSERT INTO destination_alert_sends(recipient_id,destination,delivery_id,lease_token,attempted_at) "
+                    "VALUES(?,?,?,?,?)", (recipient_id, destination, delivery_ids[0], lease_token, _iso(now)),
+                )
+                allowed.add(destination)
+            return allowed
+
+    def release_destination_alerts(self, delivery_id: int, lease_token: str) -> None:
+        """Release only a definitely unaccepted attempt, never an ambiguous one."""
+        with self._write() as connection:
+            connection.execute(
+                "DELETE FROM destination_alert_sends WHERE delivery_id=? AND lease_token=?",
+                (delivery_id, lease_token),
+            )
 
     def renew_delivery_group(self, delivery_ids: list[int], lease_token: str, lease_seconds: int = 300) -> bool:
         """Renew all owned digest rows together; never resurrect expired leases."""
@@ -767,6 +833,8 @@ class DatabaseManager:
             ):
                 removed += connection.execute(f"DELETE FROM {table} WHERE {predicate}", (cutoff,)).rowcount
             removed += connection.execute("DELETE FROM provider_cache WHERE updated_at<?", (_iso(_now() - timedelta(days=1)),)).rowcount
+            removed += connection.execute("DELETE FROM destination_alert_sends WHERE attempted_at<=?",
+                                          (_iso(_now() - timedelta(days=7)),)).rowcount
             removed += connection.execute("DELETE FROM service_leases WHERE lease_expires_at<?", (_iso(),)).rowcount
             return removed
 

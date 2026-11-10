@@ -150,7 +150,7 @@ def render_invitation(confirmation_url: str, unsubscribe_url: str) -> tuple[str,
     return subject, plain, render_message("Confirm your flight alerts", content, unsubscribe_url)
 
 
-def render_deal(payload: dict) -> tuple[str, str, str]:
+def render_deal(payload: dict, *, historical: bool = False) -> tuple[str, str, str]:
     offer = payload.get("offer")
     if not isinstance(offer, dict):
         raise ValueError("Invalid deal payload")
@@ -160,13 +160,17 @@ def render_deal(payload: dict) -> tuple[str, str, str]:
         raise ValueError("Invalid route")
     if offer.get("currency", "USD") != "USD":
         raise ValueError("Unsupported fare currency")
-    price, average = _positive(offer["price_usd"]), _positive(payload["average_price_usd"])
-    discount = float(payload["discount_percent"])
-    if not math.isfinite(discount) or not 0 <= discount <= 100:
-        raise ValueError("Invalid discount")
-    expected_discount = (average - price) / average * 100
-    if not math.isclose(discount, expected_discount, rel_tol=1e-8, abs_tol=1e-6):
-        raise ValueError("Discount does not match the fare and baseline")
+    price = _positive(offer["price_usd"])
+    comparison = not (historical and "average_price_usd" not in payload and "discount_percent" not in payload)
+    average = discount = None
+    if comparison:
+        average = _positive(payload["average_price_usd"])
+        discount = float(payload["discount_percent"])
+        if not math.isfinite(discount) or not 0 <= discount <= 100:
+            raise ValueError("Invalid discount")
+        expected_discount = (average - price) / average * 100
+        if not math.isclose(discount, expected_discount, rel_tol=1e-8, abs_tol=1e-6):
+            raise ValueError("Discount does not match the fare and baseline")
     city = _text(offer.get("destination_city", destination), 100)
     outbound = _text(offer.get("outbound_date"), 10)
     returning = _text(offer.get("return_date"), 10)
@@ -189,12 +193,30 @@ def render_deal(payload: dict) -> tuple[str, str, str]:
     stops = offer.get("layovers", 0)
     if type(stops) is not int or not 0 <= stops <= 20:
         raise ValueError("Invalid stop count")
-    subject = f"[Flight deal] {origin} to {destination}: {money(price)} ({percentage(discount)} below baseline)"
-    savings = average - price
+    subject = f"[Flight deal] {origin} to {destination}: {money(price)}"
+    savings = average - price if comparison else None
+    comparison_plain = "Historical observation; no discount comparison.\n"
+    comparison_html = ""
+    if comparison:
+        subject += f" ({percentage(discount)} below baseline)"
+        comparison_plain = (
+            f"Baseline: {money(average)} USD ({baseline_source}); difference: {percentage(discount)}\n"
+            f"Save {money(savings)} against this baseline.\n"
+        )
+        comparison_html = (
+            '<p style="margin:8px 0 0;color:#c0cbd7;font-size:14px">'
+            'Baseline: <s style="text-decoration:line-through">' + money(average) + '</s></p></td>'
+            '<td width="45%" valign="top" style="padding-bottom:20px">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+            '<tr><td align="center" bgcolor="#0b7353" style="background-color:#0b7353;'
+            'border-radius:10px;padding:14px 8px;color:#ffffff;font-size:23px;font-weight:bold;line-height:1.3">'
+            'Save<br>' + percentage(discount) + '</td></tr></table>'
+            '<p style="margin:8px 0 0;color:#c0cbd7;text-align:center;font-size:13px">Save '
+            + money(savings) + ' off baseline</p>'
+        )
     plain = (
         f"{origin} to {city} ({destination})\nRoundtrip search fare: {money(price)} USD\n"
-        f"Baseline: {money(average)} USD ({baseline_source}); difference: {percentage(discount)}\n"
-        f"Save {money(savings)} against this baseline.\n"
+        + comparison_plain +
         f"Travel dates: {outbound} to {returning}\nAirlines ({scope}): {airline_names}\n"
         f"Layovers ({scope}): {stops}\nSource: {source}\nObserved: {observed}\n"
         f"Fare availability and conditions can change. Recheck with the provider.\nBook: {booking}\n"
@@ -214,24 +236,18 @@ def render_deal(payload: dict) -> tuple[str, str, str]:
             '<td width="55%" valign="top" style="padding:0 12px 20px 0">'
             '<p style="margin:0;color:#c0cbd7;font-size:14px">Roundtrip search fare · USD</p>'
             '<p style="margin:4px 0;color:#7ad6ad;font-size:40px;line-height:1.2;font-weight:bold">'
-            + money(price) + '</p><p style="margin:8px 0 0;color:#c0cbd7;font-size:14px">'
-            'Baseline: <s style="text-decoration:line-through">' + money(average) + '</s></p></td>'
-            '<td width="45%" valign="top" style="padding-bottom:20px">'
-            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
-            '<tr><td align="center" bgcolor="#0b7353" style="background-color:#0b7353;'
-            'border-radius:10px;padding:14px 8px;color:#ffffff;font-size:23px;font-weight:bold;line-height:1.3">'
-            'Save<br>' + percentage(discount) + '</td></tr></table>'
-            '<p style="margin:8px 0 0;color:#c0cbd7;text-align:center;font-size:13px">Save '
-            + money(savings) + ' off baseline</p></td></tr></table>'
+            + money(price) + '</p>' + comparison_html + '</td></tr></table>'
             '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">')
     for label, value in (
         ("Route", f"{origin} → {destination} ({city})"),
         ("Dates", f"{display_date(outbound)} to {display_date(returning)}"),
         (f"Airlines ({scope})", airline_names),
-        (f"Layovers ({scope})", str(stops)), ("Baseline source", baseline_source),
+        (f"Layovers ({scope})", str(stops)),
         ("Source", source), ("Observed", observed_time(observed) if observed_time(observed) != "—" else observed),
     ):
         card += cell(label, value)
+    if comparison:
+        card += cell("Baseline source", baseline_source)
     card += ('</table><p style="margin:20px 0 16px;color:#c0cbd7;font-size:13px">'
              'Fare availability and conditions can change. Recheck with the provider.</p>'
              + email_button("View fare with provider", booking) + '</td></tr></table>')
@@ -308,6 +324,8 @@ class EmailNotifier:
         message.set_content(plain_body)
         message.add_alternative(html_body, subtype="html")
         context = ssl.create_default_context()
+        accepted = False
+        sending = False
         try:
             if self.smtp_port == 465:
                 connection = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, timeout=self.timeout, context=context)
@@ -320,19 +338,25 @@ class EmailNotifier:
                     server.ehlo()
                 if self.smtp_username:
                     server.login(self.smtp_username, self._smtp_password)
+                sending = True
                 refused = server.send_message(message, from_addr=self.sender_email, to_addrs=[recipient])
                 if refused:
                     raise DeliveryError("recipient_refused", retryable=False)
-        except ssl.SSLError:
-            raise DeliveryError("smtp_tls_failed", retryable=False) from None
-        except smtplib.SMTPAuthenticationError:
-            raise DeliveryError("smtp_authentication_failed", retryable=False) from None
-        except smtplib.SMTPRecipientsRefused as exc:
-            transient = any(400 <= int(code) < 500 for code, _ in exc.recipients.values())
-            raise DeliveryError("recipient_refused", retryable=transient) from None
-        except smtplib.SMTPResponseException as exc:
-            raise DeliveryError("smtp_rejected", retryable=400 <= exc.smtp_code < 500) from None
-        except (smtplib.SMTPException, OSError):
-            # The server may already have accepted DATA. The durable worker may
-            # retry; duplicates remain possible under documented at-least-once semantics.
+                accepted = True
+        except (smtplib.SMTPException, OSError) as exc:
+            # DATA has been acknowledged. A failed QUIT/connection teardown
+            # cannot undo acceptance and must never trigger another email.
+            if accepted:
+                return
+            if isinstance(exc, ssl.SSLError) and not sending:
+                raise DeliveryError("smtp_tls_failed", retryable=False) from None
+            if isinstance(exc, smtplib.SMTPAuthenticationError):
+                raise DeliveryError("smtp_authentication_failed", retryable=False) from None
+            if isinstance(exc, smtplib.SMTPRecipientsRefused):
+                transient = any(400 <= int(code) < 500 for code, _ in exc.recipients.values())
+                raise DeliveryError("recipient_refused", retryable=transient) from None
+            if isinstance(exc, smtplib.SMTPResponseException):
+                raise DeliveryError("smtp_rejected", retryable=400 <= exc.smtp_code < 500) from None
+            # Losing the connection while sending DATA leaves acceptance
+            # unknown, including TLS failures after transmission has started.
             raise DeliveryError("smtp_network_failed", retryable=True) from None

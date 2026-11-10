@@ -192,6 +192,7 @@ class FakeDatabase:
         self.now = NOW
         self.claims = 0
         self.before_get = None
+        self.destination_sends = []
 
     def add(self, recipient_id=1, kind="deal", payload=None, created=None):
         row = dict(id=len(self.rows) + 1, recipient_id=recipient_id, kind=kind,
@@ -246,6 +247,29 @@ class FakeDatabase:
         return all(self.rows[row_id - 1]["lease_token"] == token
                    and self.rows[row_id - 1]["state"] == "sending" for row_id in ids)
 
+    def reserve_destination_alerts(self, ids, token, destinations):
+        if not self.renew_delivery_group(ids, token):
+            return None
+        recipients = {self.rows[row_id - 1]["recipient_id"] for row_id in ids}
+        if len(recipients) != 1:
+            return None
+        recipient_id = recipients.pop()
+        allowed = set()
+        for destination in destinations:
+            recent = [entry["at"] for entry in self.destination_sends
+                      if entry["recipient_id"] == recipient_id and entry["destination"] == destination
+                      and entry["at"] > self.now - timedelta(days=7)]
+            if len(recent) >= 2 or (recent and max(recent) > self.now - timedelta(hours=72)):
+                continue
+            self.destination_sends.append(dict(recipient_id=recipient_id, destination=destination,
+                                               delivery_id=ids[0], lease_token=token, at=self.now))
+            allowed.add(destination)
+        return allowed
+
+    def release_destination_alerts(self, delivery_id, token):
+        self.destination_sends = [entry for entry in self.destination_sends
+                                  if (entry["delivery_id"], entry["lease_token"]) != (delivery_id, token)]
+
 
 class DeliveryTests(unittest.TestCase):
     def setUp(self):
@@ -270,7 +294,7 @@ class DeliveryTests(unittest.TestCase):
         failed, sent = self.db.add(1), self.db.add(2)
         def send(recipient, *args):
             if recipient.startswith("one"):
-                raise DeliveryError("smtp_network_failed", True)
+                raise DeliveryError("smtp_rejected", True)
         self.notifier.send_message.side_effect = send
         self.assertEqual(self.service.process_pending(), 1)
         self.assertEqual(failed["state"], "pending")
@@ -591,7 +615,7 @@ class SQLiteDeliveryIntegrationTests(unittest.TestCase):
         self.enqueue("second", second["id"])
         def send(recipient, *args):
             if recipient.startswith("one"):
-                raise DeliveryError("smtp_network_failed")
+                raise DeliveryError("smtp_rejected")
         self.notifier.send_message.side_effect = send
         self.assertEqual(self.service.process_pending(limit=2), 1)
         self.assertEqual([row["status"] for row in self.rows()], ["retry", "sent"])
@@ -651,7 +675,7 @@ class SQLiteDeliveryIntegrationTests(unittest.TestCase):
 
     def test_retries_are_bounded_and_do_not_resurrect_failed_delivery(self):
         self.enqueue("first")
-        self.notifier.send_message.side_effect = DeliveryError("smtp_network_failed")
+        self.notifier.send_message.side_effect = DeliveryError("smtp_rejected")
         for _ in range(5):
             self.assertEqual(self.service.process_pending(limit=1), 0)
             self.now += timedelta(hours=1)
