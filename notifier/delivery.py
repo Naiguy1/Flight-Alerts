@@ -198,7 +198,7 @@ class DeliveryService:
                     payloads.append(row["payload"])
             if not payloads or len(payloads) > 100:
                 raise ValueError("Invalid digest payload")
-            rendered = [render_deal(payload) for payload in payloads]
+            rendered = [render_deal(payload, historical=rows[0]["payload"].get("weekly") is True) for payload in payloads]
             if rows[0]["payload"].get("weekly") is True:
                 period = rows[0]["payload"]["week_start"] + " to " + rows[0]["payload"]["week_end"]
                 notice = "Best fares observed " + period + ". Historical prices; availability and prices may have changed."
@@ -210,6 +210,34 @@ class DeliveryService:
             plain = "\n\n".join(item[1] for item in rendered) + "\nUnsubscribe: " + unsubscribe + "\n"
             return subject, plain, render_message("Your flight deal" if len(rendered) == 1 else "Your flight deal digest", "".join(item[2] for item in rendered), unsubscribe), unsubscribe
         raise ValueError("Unsupported notification kind")
+
+    def _limit_destinations(self, rows: list[dict]) -> tuple[list[dict], tuple[int, str] | None]:
+        """Filter live fares using an atomic, durable allowance just before SMTP."""
+        if rows[0]["kind"] not in {"deal", "digest"} or rows[0]["payload"].get("weekly") is True:
+            return rows, None
+        destinations = set()
+        for row in rows:
+            items = row["payload"].get("deals", []) if row["kind"] == "digest" else [row["payload"]]
+            destinations.update(item["offer"]["destination"].strip().upper() for item in items)
+        anchor = (rows[0]["id"], rows[0]["lease_token"])
+        allowed = self.db.reserve_destination_alerts([row["id"] for row in rows], anchor[1], destinations)
+        if allowed is None:
+            return [], None
+        selected = []
+        for row in rows:
+            if row["kind"] == "digest":
+                row["payload"]["deals"] = [item for item in row["payload"]["deals"]
+                    if item["offer"]["destination"].strip().upper() in allowed]
+                keep = bool(row["payload"]["deals"])
+            else:
+                keep = row["payload"]["offer"]["destination"].strip().upper() in allowed
+            if keep:
+                selected.append(row)
+            else:
+                # The 72h gap exceeds live-fare freshness. A later scan must
+                # supply a fresh price rather than draining this stale backlog.
+                self._cancel([row], "destination_cooldown")
+        return selected, anchor if allowed else None
 
     def _process_group(self, rows: list[dict], filters: dict, digest: bool) -> int:
         now = _utc_datetime(self.clock())
@@ -288,6 +316,7 @@ class DeliveryService:
             rows = approved
             if not rows:
                 return 0
+        reservation = None
         try:
             # Recheck consent immediately before the network side effect. An
             # already-in-flight SMTP delivery cannot be withdrawn atomically.
@@ -338,13 +367,23 @@ class DeliveryService:
             rows = self._unexpired(rows, _utc_datetime(self.clock()), latest_filters)
             if not rows:
                 return 0
+            # Validate all content before reserving capacity. Re-render after
+            # filtering so a blocked destination cannot leak into a digest.
+            self._prepare(rows, current)
+            rows, reservation = self._limit_destinations(rows)
+            if not rows:
+                return 0
             subject, plain, body_html, unsubscribe = self._prepare(rows, current)
             self.notifier.send_message(current["email"], subject, plain, body_html, unsubscribe)
         except DeliveryError as exc:
+            if reservation and exc.category != "smtp_network_failed":
+                self.db.release_destination_alerts(*reservation)
             self._outcome(rows, False, exc.category, retryable=exc.retryable, digest=digest and kind == "deal")
             logger.warning("notification_delivery_failed", extra={"category": exc.category, "delivery_id": rows[0]["id"]})
             return 0
         except (ValueError, TypeError, KeyError, OverflowError, AttributeError):
+            if reservation:
+                self.db.release_destination_alerts(*reservation)
             self._outcome(rows, False, "invalid_notification_payload", retryable=False, digest=digest and kind == "deal")
             logger.warning("notification_payload_rejected", extra={"delivery_id": rows[0]["id"]})
             return 0

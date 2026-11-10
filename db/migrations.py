@@ -1,8 +1,10 @@
 """Versioned migrations, applied inside the caller's single write transaction."""
 from pathlib import Path
+from datetime import datetime, timezone
+import json
 import sqlite3
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 MIGRATION_DIRECTORY = Path(__file__).resolve().parents[1] / "migrations"
 
 
@@ -84,4 +86,28 @@ def migrate(connection: sqlite3.Connection, now: str) -> None:
     if 4 not in applied:
         _script(connection, "004_weekly.sql")
         connection.execute("INSERT INTO schema_migrations VALUES (?,?)", (4, now))
+    if 5 not in applied:
+        _script(connection, "005_destination_alert_limits.sql")
+        # Seed the allowance with actual historical sends, including explicit
+        # live digests. alert_logs.sent_at is only a compatibility timestamp.
+        for row in connection.execute(
+            "SELECT id,recipient_id,kind,payload,sent_at FROM deliveries "
+            "WHERE status='sent' AND kind IN ('deal','digest') AND sent_at IS NOT NULL "
+            "AND julianday(sent_at)>julianday(?)-7", (now,),
+        ).fetchall():
+            payload = json.loads(row[3])
+            if not isinstance(payload, dict) or payload.get("weekly") is True:
+                continue
+            items = [payload] if row[2] == "deal" else payload.get("deals", [])
+            destinations = {item.get("offer", {}).get("destination", "").strip().upper()
+                            for item in items if isinstance(item, dict) and isinstance(item.get("offer"), dict)}
+            for destination in destinations - {""}:
+                sent = datetime.fromisoformat(row[4].replace("Z", "+00:00"))
+                if sent.tzinfo is not None:
+                    sent = sent.astimezone(timezone.utc).replace(tzinfo=None)
+                connection.execute(
+                    "INSERT INTO destination_alert_sends(recipient_id,destination,delivery_id,lease_token,attempted_at) "
+                    "VALUES(?,?,?,'migration',?)", (row[1], destination, row[0], sent.isoformat(timespec="microseconds")),
+                )
+        connection.execute("INSERT INTO schema_migrations VALUES (?,?)", (5, now))
     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")

@@ -296,6 +296,13 @@ class ScanService:
                                             and offer.destination in active]
                             if observations:
                                 self.db.record_offers(observations)
+                                # Weekly historical lows include fares that did
+                                # not qualify for an immediate discounted alert.
+                                self.db.record_weekly_offers(
+                                    observations,
+                                    scan_job_id=job["id"] if job else None,
+                                    scan_lease_token=job["lease_token"] if job else None,
+                                )
                                 result.observations += len(observations)
                             if not live["filters"]["alerts_paused"]:
                                 for deal in deals:
