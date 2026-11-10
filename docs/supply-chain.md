@@ -19,9 +19,19 @@ The Docker official-image metadata was inspected for the actual build inputs:
 
 | Role | Official metadata | Immutable manifest digest |
 |---|---|---|
-| Application CPython 3.12.16 / Alpine | [Python 3.12 Alpine](https://github.com/docker-library/repo-info/blob/master/repos/python/remote/3.12-alpine.md) | `sha256:5789aa194f757888f41fa3d48e14b6feaa1b57c0af0b56fcb1372d6474d3bff0` |
+| Application CPython 3.12.16 / Alpine 3.24.4 (refreshed 2026-11-10) | [Python 3.12 Alpine](https://github.com/docker-library/repo-info/blob/master/repos/python/remote/3.12-alpine.md) | `sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7` |
 | Proxy Go 1.27.3 builder | [Go 1.27.3 Alpine](https://github.com/docker-library/repo-info/blob/master/repos/golang/remote/1.27.3-alpine.md) | `sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb` |
 | Minimal proxy runtime | [Alpine 3.24](https://github.com/docker-library/repo-info/blob/master/repos/alpine/remote/3.24.md) | `sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a` |
+
+The 2026-11-10 Image gate on merged revision
+`15473f49951b1014f15039c3a8d5eb87159c6c53` identified 16 HIGH findings in
+`krb5-libs 1.22.2-r1`, a transitive OS dependency of the Python base. The Python
+base manifest was refreshed from official metadata, and the runtime installation
+explicitly requires `krb5-libs>=1.22.3-r0` with package upgrades enabled. Alpine's
+[3.24 Kerberos package security record](https://github.com/alpinelinux/aports/blob/3.24-stable/main/krb5/APKBUILD)
+lists this version as fixing the reported vulnerabilities. The build must fail
+if that fixed package cannot be installed. Image vulnerability gates and scanner
+findings remain enabled; the rebuilt image must pass CI before release.
 
 The first image scan rejected the earlier Python slim/stock Caddy images because
 of high-severity OS and Go dependency findings. Those images are no longer build

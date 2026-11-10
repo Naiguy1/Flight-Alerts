@@ -1,5 +1,5 @@
 # Official multi-architecture manifest verified in docker-library/repo-info.
-FROM python:3.12-alpine@sha256:5789aa194f757888f41fa3d48e14b6feaa1b57c0af0b56fcb1372d6474d3bff0 AS dependencies
+FROM python:3.12-alpine@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7 AS dependencies
 WORKDIR /build
 COPY requirements.txt requirements-scraper.txt ./
 ARG INSTALL_SCRAPER=false
@@ -8,7 +8,7 @@ RUN python -m venv /opt/venv \
     && if [ "$INSTALL_SCRAPER" = "true" ]; then /opt/venv/bin/python -m pip install --no-cache-dir --require-hashes -r requirements-scraper.txt; fi \
     && /opt/venv/bin/python -m pip check
 
-FROM python:3.12-alpine@sha256:5789aa194f757888f41fa3d48e14b6feaa1b57c0af0b56fcb1372d6474d3bff0
+FROM python:3.12-alpine@sha256:e064671ca452259bab50e8e2c7bd896e39e9a343bb06ca25234adf6fe18d0fc7
 WORKDIR /app
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
@@ -16,7 +16,9 @@ ENV PATH="/opt/venv/bin:$PATH" \
     DATABASE_URL=sqlite:////app/data/flight_deals.db \
     CONFIG_PATH=/app/config.yaml \
     WORKER_HEARTBEAT_PATH=/app/data/worker-heartbeat.json
-RUN apk add --no-cache ca-certificates tzdata \
+# The Python runtime pulls Kerberos transitively through libnsl/libtirpc.
+# Require Alpine's security fix even if the pinned base predates that package.
+RUN apk add --no-cache --upgrade ca-certificates tzdata 'krb5-libs>=1.22.3-r0' \
     && addgroup -S -g 10001 flight \
     && adduser -S -D -H -u 10001 -G flight flight \
     && mkdir -p /app/data \
