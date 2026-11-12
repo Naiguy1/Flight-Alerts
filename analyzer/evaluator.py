@@ -28,6 +28,11 @@ class DealEvaluator:
         blocked_destinations: Optional[List[str]] = None,
         route_baselines: Optional[Dict[str, Dict[str, float]]] = None,
         allowed_origins: Optional[List[str]] = None,
+        historical_as_of: str | None = None,
+        history_max_id: int | None = None,
+        historical_min_observation_days: int = 14,
+        historical_min_date_pairs: int = 30,
+        historical_snapshot_id: int | None = None,
     ):
         self.db = db
         self.discount_threshold_percent = discount_threshold_percent
@@ -40,6 +45,9 @@ class DealEvaluator:
         self.blocked_terms = {str(item).strip().lower() for item in (blocked_destinations or [])}
         self.route_baselines = route_baselines or {}
         self.allowed_origins = {a.upper() for a in (allowed_origins or ["SLC", "LAS"])}
+        self.historical_options = dict(as_of=historical_as_of, history_max_id=history_max_id,
+            min_observation_days=historical_min_observation_days, min_date_pairs=historical_min_date_pairs,
+            snapshot_id=historical_snapshot_id)
         self._stats_cache: dict[tuple[str, str], tuple[float | None, int]] = {}
 
     def is_eligible_route(self, offer: FlightOffer) -> bool:
@@ -61,10 +69,10 @@ class DealEvaluator:
             return typical, "Provider typical-price midpoint"
         key = (offer.origin, offer.destination)
         if key not in self._stats_cache:
-            self._stats_cache[key] = self.db.get_historical_route_stats(*key)
+            self._stats_cache[key] = self.db.get_historical_route_stats(*key, **self.historical_options)
         historical, count = self._stats_cache[key]
         if historical is not None and isfinite(historical) and historical > 0 and count >= self.min_historical_samples:
-            return historical, f"Historical route average ({count} observations, 90 days)"
+            return historical, f"Historical daily cheapest-fare median ({count} date/day samples, 90 days)"
         configured = self.route_baselines.get(offer.destination, {}).get(offer.origin)
         if configured is not None and isfinite(configured) and configured > 0:
             return float(configured), "Operator-configured reference (not a market guarantee)"

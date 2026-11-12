@@ -102,6 +102,8 @@ def validate_config(value: dict) -> dict:
         ("discount_threshold_percent", 50, 1, 99, False),
         ("deduplication_window_hours", 48, 1, 720, True),
         ("min_historical_samples_for_db_avg", 15, 2, 10000, True),
+        ("historical_min_observation_days", 14, 2, 90, True),
+        ("historical_min_date_pairs", 30, 2, 10000, True),
         ("price_improvement_usd", 35, 1, 1000, False),
         ("price_improvement_percent", 10, 1, 90, False),
         ("freshness_hours", 24, 1, 168, True),

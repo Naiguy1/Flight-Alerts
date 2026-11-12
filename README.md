@@ -1,12 +1,16 @@
 # Flight-Alerts
 
 Flight-Alerts watches flight prices and emails verified subscribers when fares
-meet your configured deal threshold. It runs on one host with a password-protected
+meet your configured deal threshold. Each scan queues one email per destination,
+highlighting its cheapest qualifying fare with date, origin, price and booking
+options on one card. Candidates survive worker restarts. It runs on one host with a password-protected
 HTTPS dashboard, a worker, and a persistent SQLite database.
 
 Each subscriber receives at most two live alert emails per destination in any
 rolling seven days, spaced at least 72 hours apart, across all origins and travel
-dates. Price improvements do not bypass this limit. Live digests count once for
+dates. A destination is also suppressed when a live email sent in the last seven
+days advertised the same or a cheaper fare. Price improvements do not bypass the
+count or spacing limits. Live digests count once for
 each destination they contain. The optional weekly recap is separate and keeps
 the best observed prices even when individual alerts are suppressed.
 
@@ -14,6 +18,13 @@ The allowance survives restarts and upgrades, which count previously sent
 alerts. Suppressed pending fares are canceled; later scans can supply fresh
 offers after the cooldown. An uncertain SMTP acknowledgment also spends a slot
 to prevent duplicate retries; definite rejection releases it.
+
+Historical references use daily medians of the cheapest fares per travel-date
+pair, with equal weight for each observation day. They exclude the current scan,
+past departures and future observations. At least 14 observation days, 30 distinct
+date pairs and the configured number of date/day samples are required. Sparse
+routes use the explicitly labeled operator reference; it is not a market guarantee.
+See [scan summaries and baseline auditing](docs/scan-summaries.md) before upgrading.
 
 ## Set up or upgrade
 

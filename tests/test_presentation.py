@@ -61,9 +61,9 @@ class DashboardRenderingTests(unittest.TestCase):
             alerts=[{"origin": "SLC", "destination": "TPA", "alerted_price_usd": 146.49,
                      "discount_percent": 55.345, "baseline_source": "Historical"}])
         self.assertIn('>55.3% off</span>', output)
-        self.assertIn('aria-label="55.3% below the 90-day route average"', output)
+        self.assertIn('aria-label="55.3% below the 90-day cheapest-fare reference"', output)
         self.assertIn('class="fare-price">$146</strong>', output)
-        self.assertIn('90-day average $327">$327</s>', output)
+        self.assertIn('90-day reference $327">$327</s>', output)
         self.assertNotIn("1338.266", output)
         self.assertNotIn("$146.00", output)
         self.assertNotIn("<script>", output)

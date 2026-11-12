@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import json
 import sqlite3
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 MIGRATION_DIRECTORY = Path(__file__).resolve().parents[1] / "migrations"
 
 
@@ -110,4 +110,15 @@ def migrate(connection: sqlite3.Connection, now: str) -> None:
                     "VALUES(?,?,?,'migration',?)", (row[1], destination, row[0], sent.isoformat(timespec="microseconds")),
                 )
         connection.execute("INSERT INTO schema_migrations VALUES (?,?)", (5, now))
+    if 6 not in applied:
+        _script(connection, "006_scan_summaries.sql")
+        # Previously queued per-itinerary live fares would race new summaries.
+        # Leave invitations, status watches and the optional weekly recap intact.
+        for row in connection.execute("SELECT id,payload FROM deliveries WHERE status IN ('pending','retry') "
+                                      "AND kind IN ('deal','digest')").fetchall():
+            payload = json.loads(row[1])
+            if isinstance(payload, dict) and payload.get("weekly") is not True:
+                connection.execute("UPDATE deliveries SET status='canceled',last_error='superseded_by_scan_summary',"
+                                   "lease_token=NULL,lease_expires_at=NULL WHERE id=?", (row[0],))
+        connection.execute("INSERT INTO schema_migrations VALUES (?,?)", (6, now))
     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")

@@ -152,7 +152,8 @@ class FarePolicyTests(unittest.TestCase):
         result = DealEvaluator(db, route_baselines={"LHR": {"SLC": 1000}}).evaluate_offers([fare()])
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].discount_percent, 75)
-        self.assertEqual(db.method_calls, [unittest.mock.call.get_historical_route_stats("SLC", "LHR")])
+        self.assertEqual(db.method_calls, [unittest.mock.call.get_historical_route_stats("SLC", "LHR",
+            as_of=None, history_max_id=None, min_observation_days=14, min_date_pairs=30, snapshot_id=None)])
 
     def test_minimum_samples_enforced_without_configured_baseline(self):
         self.assertEqual(DealEvaluator(self.db(1000, 1), min_historical_samples=15).evaluate_offers([fare()]), [])

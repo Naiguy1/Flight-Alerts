@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
-from notifier.emailer import DeliveryError, EmailNotifier, render_deal, render_invitation, render_message, render_status
+from notifier.emailer import DeliveryError, EmailNotifier, render_deal, render_destination_deal, render_invitation, render_message, render_status
 from notifier.tokens import TokenSigner
 
 logger = logging.getLogger(__name__)
@@ -198,6 +198,9 @@ class DeliveryService:
                     payloads.append(row["payload"])
             if not payloads or len(payloads) > 100:
                 raise ValueError("Invalid digest payload")
+            if rows[0]["payload"].get("destination_summary") is True:
+                subject, plain, card = render_destination_deal(rows[0]["payload"])
+                return subject, plain + "\nUnsubscribe: " + unsubscribe, render_message("Your flight deal", card, unsubscribe), unsubscribe
             rendered = [render_deal(payload, historical=rows[0]["payload"].get("weekly") is True) for payload in payloads]
             if rows[0]["payload"].get("weekly") is True:
                 period = rows[0]["payload"]["week_start"] + " to " + rows[0]["payload"]["week_end"]
@@ -220,7 +223,8 @@ class DeliveryService:
             items = row["payload"].get("deals", []) if row["kind"] == "digest" else [row["payload"]]
             destinations.update(item["offer"]["destination"].strip().upper() for item in items)
         anchor = (rows[0]["id"], rows[0]["lease_token"])
-        allowed = self.db.reserve_destination_alerts([row["id"] for row in rows], anchor[1], destinations)
+        allowed = self.db.reserve_destination_alerts([row["id"] for row in rows], anchor[1], destinations,
+            payloads={row["id"]: row["payload"] for row in rows})
         if allowed is None:
             return [], None
         selected = []
@@ -268,12 +272,12 @@ class DeliveryService:
             return 0
         if not rows:
             return 0
-        if kind == "deal":
+        if kind == "deal" or rows[0]["payload"].get("destination_summary") is True:
             if digest:
                 first_created = min(_utc_datetime(row["created_at"]) for row in rows)
                 interval = timedelta(hours=int(filters.get("digest_interval_hours", 6)))
                 due = first_created + interval
-                if recipient.get("last_digest_at"):
+                if kind == "deal" and recipient.get("last_digest_at"):
                     due = max(due, _utc_datetime(recipient["last_digest_at"]) + interval)
                 remaining = int((due - now).total_seconds())
                 if remaining > 0:

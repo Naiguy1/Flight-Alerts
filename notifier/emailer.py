@@ -255,6 +255,43 @@ def render_deal(payload: dict, *, historical: bool = False) -> tuple[str, str, s
     return subject, plain, card
 
 
+def render_destination_deal(payload: dict) -> tuple[str, str, str]:
+    """One destination card with independently priced and linked travel dates."""
+    options = payload.get("deals")
+    if not isinstance(options, list) or not 1 <= len(options) <= 100:
+        raise ValueError("Invalid destination summary")
+    options = sorted(options, key=lambda item: (_positive(item["offer"]["price_usd"]),
+        item["offer"]["origin"], item["offer"]["outbound_date"], item["offer"]["return_date"]))
+    if len({item["offer"]["destination"] for item in options}) != 1:
+        raise ValueError("Destination summary contains multiple destinations")
+    # Validate every date, amount, discount and URL through the same renderer.
+    rendered = [render_deal(item) for item in options]
+    best = options[0]["offer"]
+    subject = f"[Flight deal] {best['destination']}: from {money(best['price_usd'])}"
+    plain = rendered[0][1] + "\nAvailable travel options:\n"
+    rows = []
+    for item in options:
+        offer = item["offer"]
+        url = offer.get("booking_url") or "https://www.google.com/travel/flights?" + urlencode({
+            "q": f"Flights from {offer['origin']} to {offer['destination']} on {offer['outbound_date']} through {offer['return_date']}",
+            "curr": "USD"})
+        url = _https_url(url, booking=True)
+        dates = f"{display_date(offer['outbound_date'])} to {display_date(offer['return_date'])}"
+        label = f"{offer['origin']} → {offer['destination']} · {dates} · {money(offer['price_usd'])} USD"
+        plain += label + "\nBook: " + url + "\n"
+        rows.append('<tr><td style="padding:10px;border-bottom:1px solid #3a4959;color:#f3f7fb">'
+                    + html.escape(label) + '<br><a style="color:#9fc5ff" href="'
+                    + html.escape(url, quote=True) + '">View this date option</a></td></tr>')
+    notice = "Each date option has its own fare. The highlighted fare is the cheapest currently available option."
+    if payload.get("total_options", len(options)) > len(options):
+        notice += f" Showing {len(options)} options from {int(payload['total_options'])} qualifying scan results."
+    if payload.get("scan_partial") is True:
+        notice += " Some travel dates could not be checked in this scan."
+    card = rendered[0][2] + '<p style="color:#c0cbd7">' + html.escape(notice) + '</p>'
+    card += '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + "".join(rows) + '</table>'
+    return subject, plain + notice + "\n", card
+
+
 def render_status(payload: dict) -> tuple[str, str, str]:
     flight = _text(payload.get("flight_iata"), 10)
     if not re.fullmatch(r"[A-Z0-9]{2,3}[0-9]{1,4}[A-Z]?", flight):

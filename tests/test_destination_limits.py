@@ -75,7 +75,7 @@ class DestinationLimitTests(unittest.TestCase):
         self.enqueue()
         self.assertEqual(self.service().process_pending(), 0)
         self.now = start + timedelta(hours=72)
-        self.enqueue(origin="LAX")
+        self.enqueue(origin="LAX", payload=self.payload(origin="LAX", price=250))
         self.db = DatabaseManager(self.url)
         self.assertEqual(self.service().process_pending(), 1)
         self.now = start + timedelta(days=6)
@@ -85,7 +85,7 @@ class DestinationLimitTests(unittest.TestCase):
         self.enqueue()
         self.assertEqual(self.service().process_pending(), 0)
         self.now = start + timedelta(days=7)
-        self.enqueue()
+        self.enqueue(payload=self.payload(price=200))
         self.assertEqual(self.service().process_pending(), 1)
         self.assertEqual(self.notifier.send_message.call_count, 3)
 
@@ -96,6 +96,36 @@ class DestinationLimitTests(unittest.TestCase):
         self.enqueue(destination="SJU")
         self.enqueue(recipient=other)
         self.assertEqual(self.service().process_pending(), 3)
+
+    def test_same_or_more_expensive_fare_is_suppressed_even_after_72_hours(self):
+        self.enqueue()
+        self.assertEqual(self.service().process_pending(), 1)
+        self.now += timedelta(hours=72)
+        for price in (288, 300):
+            self.enqueue(payload=self.payload(origin="LAS", price=price))
+            self.assertEqual(self.service().process_pending(), 0)
+        self.enqueue(payload=self.payload(origin="LAS", price=250))
+        self.assertEqual(self.service().process_pending(), 1)
+
+    def test_same_price_becomes_eligible_at_exact_seven_day_boundary(self):
+        self.enqueue()
+        self.assertEqual(self.service().process_pending(), 1)
+        self.now += timedelta(days=7)
+        self.enqueue()
+        self.assertEqual(self.service().process_pending(), 1)
+
+    def test_weekly_floor_uses_revalidated_sent_price(self):
+        self.enqueue(payload=self.payload(price=400))
+        service = self.service()
+        def refresh(payload):
+            payload["offer"]["price_usd"] = 250
+            payload["discount_percent"] = 75
+            return True
+        service.revalidate = refresh
+        self.assertEqual(service.process_pending(), 1)
+        self.now += timedelta(hours=72)
+        self.enqueue(payload=self.payload(price=300))
+        self.assertEqual(self.service().process_pending(), 0)
 
     def test_slow_smtp_starts_cooldown_from_acknowledgment(self):
         start = self.now
@@ -108,7 +138,7 @@ class DestinationLimitTests(unittest.TestCase):
         self.enqueue()
         self.assertEqual(self.service().process_pending(), 0)
         self.now += timedelta(seconds=20)
-        self.enqueue()
+        self.enqueue(payload=self.payload(price=250))
         self.assertEqual(self.service().process_pending(), 1)
 
     def test_explicit_digest_filters_blocked_destination_and_spends_one_slot(self):
@@ -184,7 +214,7 @@ class DestinationLimitTests(unittest.TestCase):
         start = self.now
         for day in (0, 3):
             self.now = start + timedelta(days=day)
-            self.enqueue()
+            self.enqueue(payload=self.payload(price=288-day))
             self.assertEqual(self.service().process_pending(), 1)
         self.now = start + timedelta(days=6)
         self.db.cleanup(retention_days=1)

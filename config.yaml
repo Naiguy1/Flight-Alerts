@@ -30,6 +30,8 @@ filters:
   discount_threshold_percent: 50.0
   deduplication_window_hours: 24
   min_historical_samples_for_db_avg: 500
+  historical_min_observation_days: 14
+  historical_min_date_pairs: 30
   excluded_country_codes:
   - US
   allowed_domestic_airports:
