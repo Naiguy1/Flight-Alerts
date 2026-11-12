@@ -1,5 +1,8 @@
 # Audit report resolution and launch checks
 
+The historical-baseline and per-itinerary delivery behavior described below has
+been superseded by [destination summaries and robust references](scan-summaries.md).
+
 Compared against main `3719f8775ccb5717f8b338eeab35b6695f43ced9` on 2026-11-05.
 Code changes do not constitute evidence that a production deployment was changed.
 

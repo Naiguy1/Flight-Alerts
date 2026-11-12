@@ -26,7 +26,7 @@ complete the same delivery as their own. Failed recipients are retried
 individually; a successful recipient does not erase another recipient's failure.
 Unverified/disabled recipients are excluded from ordinary deal/status delivery.
 An explicit empty list means no recipients. Pausing alerts, quiet-hour deferral,
-and digest batching are visible operator settings.
+and an optional summary delay are visible operator settings.
 
 SMTP acceptance followed by a process crash can leave acknowledgment uncertain.
 Lease recovery can resend an accepted message. Operators must expect occasional
@@ -37,14 +37,20 @@ idempotent external delivery API if a stronger guarantee becomes necessary.
 
 Amounts are validated as finite positive USD values. Airport/country/date
 formats and HTTPS booking-host allowlists are enforced at normalization.
-Historical comparisons require adequate samples and display baseline provenance;
-configured targets remain operator assumptions, not verified market averages.
-Observed fares can expire. The dashboard filters old/past-departure offers and
-has no deals when there are no active destinations. Material price improvements
-can create a new alert during the cooldown according to configured thresholds.
-Cooldowns apply to exact departure and return dates, so distinct itineraries
-remain eligible. All eligible returned prices contribute to history; the
-dashboard chooses the cheapest fare from the latest search batch.
+Historical comparisons use daily medians of cheapest upcoming fares with minimum
+observation-day, travel-date and deduplicated-sample coverage. Each scan freezes
+its historical cutoff, row-ID boundary and calculated route references before
+requests; revalidation preserves that snapshot even after history cleanup. Provider typical-price estimates retain priority, with a labeled
+operator reference as the final fallback. See [scan summaries](scan-summaries.md).
+
+Candidates persist in SQLite during collection. Completed and quota/deadline
+limited scans publish one destination summary atomically after queries finish.
+Every option is checked for freshness and revalidated before delivery, which
+selects the cheapest remaining fare and lists date/price options on one card.
+Actual sent prices establish a per-recipient destination minimum over seven days.
+Equal or worse fares are suppressed, with hard two-per-week and 72-hour limits.
+The dashboard uses the same robust historical method at the current time and
+selects the cheapest fare from the latest search batch for each date pair.
 
 Departure sampling rotates inside calendar partitions rather than repeatedly
 querying fixed offsets. The scraper is tried first when enabled, followed by

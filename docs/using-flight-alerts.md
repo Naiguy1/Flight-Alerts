@@ -47,13 +47,16 @@ Reload the page if another tab has already saved newer settings.
 | Alert minimum discount (%) | How far below the selected reference price a fare must be. A $250 fare against a $1000 reference is 75% below it. |
 | Delivery maximum fare age (hours) | How long an observed fare is usable; old or past-departure fares are excluded. Queued fares are checked again before sending. |
 | Scan interval (hours) | How often the worker schedules searches. The starter guide uses 24 hours. |
-| Repeat-alert cooldown (hours) | Limits repeated alerts for the same route during this window. |
-| Price improvement (USD) / (%) | A new lower price can bypass that cooldown if **either** improvement threshold is met. |
 | Pause alerts | Stops new ordinary fare alerts and delays queued fare/status alerts. Scans and invitation emails can still run. |
 | Use quiet hours | Delays ordinary alerts during the chosen local-time window. For 10 p.m. to 7 a.m., use start 22, end 7. Equal start/end disables the quiet window. |
 | Timezone | A timezone name such as `America/Denver`; not an abbreviation such as MST. |
-| Group fare alerts into digests | Sends fare notifications together after the digest interval instead of immediately. Status messages are not grouped into fare digests. |
-| Digest interval (hours) | Must be shorter than fare freshness. For example, 6-hour digests with 24-hour freshness are valid. |
+| Delay destination summaries | Waits the configured interval after a scan completes. Each destination still receives its own email with date/price options. |
+| Summary delay (hours) | Must be shorter than fare freshness. For example, a 6-hour delay with 24-hour freshness is valid. |
+
+Each scan queues at most one email per destination after its queries stop. A live
+email sent at the same or a cheaper price in the preceding seven days suppresses
+that destination. The maximum is two emails per destination per recipient in seven
+days, spaced at least 72 hours apart. See [summary and baseline details](scan-summaries.md).
 
 Quiet hours, pending work, quotas, and provider freshness mean mail timing is not
 an exact appointment. A fare may expire while waiting and then be canceled.
@@ -101,7 +104,7 @@ An already queued/running scan or the manual cooldown can prevent another job.
 | Provider health has a recent success | That provider returned a usable response, possibly with no offers |
 | A scan succeeded | Its search windows completed with the required provider coverage |
 | A scan failed / is incomplete | Check its safe error category and the provider table; some routes may still have results |
-| 50% below average has entries | Latest itinerary observations at least 50% below their route’s rolling 90-day USD average; delivery freshness does not filter this list |
+| Matching fares has entries | Latest itinerary observations at least 50% below a covered historical cheapest-fare reference; delivery freshness does not filter this list |
 | Latest reserved alerts has an entry | A notification intent was saved; it does not prove everyone received it |
 | Per-recipient delivery says `sent` | The configured SMTP server accepted the message; inbox placement is still up to the mail service |
 
@@ -114,9 +117,10 @@ for a route even when its key is valid.
 The dashboard fare list uses only recorded route history, with no provider or
 configured-baseline fallback. It shows at most 12 upcoming itineraries, using
 only the latest observation for each itinerary within the rolling 90-day window.
-The route average includes every valid USD observation in that window (including
-the latest price and observations for past travel dates). It displays the average,
-discount, observation time and sample count; a displayed fare is not a guarantee
+The route reference takes a median of daily medians of the cheapest valid USD
+fares for each upcoming travel-date pair. It requires minimum observation-day,
+date-pair and sample coverage, and excludes past departures and future observations.
+It displays the reference, discount, observation time and deduplicated sample count; a displayed fare is not a guarantee
 of current availability. A route with no qualifying discount has no entries.
 The dashboard's fixed 50% filter is independent of the alert threshold and delivery
 age settings.

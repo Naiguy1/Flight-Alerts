@@ -80,16 +80,17 @@ class LaunchScannerTests(DatabaseFixture):
         provider.fetch_offers = fetch
         result = self.scan([provider])
         self.assertEqual(result.observations, 6)
-        self.assertEqual(self.db.get_historical_route_stats("SLC", "LHR"), (600, 6))
+        self.assertEqual(self.db.get_historical_route_stats("SLC", "LHR"), (None, 2))
+        self.assertEqual(self.db.get_historical_route_stats("SLC", "LHR",
+            min_observation_days=1, min_date_pairs=1), (200, 2))
         recent = self.db.dashboard_snapshot(["LHR"])["recent_deals"]
-        self.assertEqual(len(recent), 2)
-        self.assertTrue(all(row["price_usd"] == 200 for row in recent))
+        self.assertEqual(recent, [])  # A single day's quotes cannot establish a reference.
 
     def test_new_search_replaces_old_cheap_fare_in_dashboard(self):
         first = offer()
         expensive = FlightOffer(**{**asdict(first), "price_usd": 1000})
         self.db.record_offers([first, expensive])
-        self.assertEqual(self.db.dashboard_snapshot(["LHR"])["recent_deals"][0]["price_usd"], 200)
+        self.assertEqual(self.db.dashboard_snapshot(["LHR"])["recent_deals"], [])
         self.db.record_offers([expensive])
         self.assertEqual(self.db.dashboard_snapshot(["LHR"])["recent_deals"], [])
 
@@ -130,10 +131,14 @@ class LaunchScannerTests(DatabaseFixture):
             return []
         provider.fetch_offers = fetch
         service = ScanService(self.db, self.runtime, self.cfg, fetcher_factory=lambda cfg: [provider])
-        service.run(job={"id": 1, "lease_token": "unused"})
+        self.db.enqueue_scan(0)
+        job = self.db.claim_scan()
+        result = service.run(job=job)
+        self.db.finish_scan(job["id"], job["lease_token"], result.success)
         first = set(captured)
         captured.clear()
-        service.run(job={"id": 2, "lease_token": "unused"})
+        self.db.enqueue_scan(0)
+        service.run(job=self.db.claim_scan())
         self.assertEqual(set(captured), {day + timedelta(days=1) for day in first})
 
     def test_return_date_alone_defines_a_distinct_itinerary(self):

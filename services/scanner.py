@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import math
 import threading
 import time
@@ -37,7 +38,7 @@ def departure_offsets(window: dict, phase: int) -> list[int]:
             for sample, start, end in zip(samples, edges, edges[1:])]
 
 
-def evaluator_for(db, config: dict) -> DealEvaluator:
+def evaluator_for(db, config: dict, *, batch: dict | None = None) -> DealEvaluator:
     filters = config["filters"]
     return DealEvaluator(
         db, discount_threshold_percent=filters["discount_threshold_percent"],
@@ -47,6 +48,11 @@ def evaluator_for(db, config: dict) -> DealEvaluator:
         blocked_destinations=filters["blocked_destinations"],
         route_baselines=route_baselines(config["monitored_destinations"]),
         allowed_origins=config["scanner"]["origins"],
+        historical_as_of=batch["baseline_at"] if batch else None,
+        history_max_id=batch["history_max_id"] if batch else None,
+        historical_snapshot_id=batch.get("id") if batch else None,
+        historical_min_observation_days=filters["historical_min_observation_days"],
+        historical_min_date_pairs=filters["historical_min_date_pairs"],
     )
 
 
@@ -176,6 +182,9 @@ class ScanService:
         result.total_windows = len(queries)
         if not queries:
             return result
+        batch = None if dry_run else self.db.begin_scan_batch(job)
+        if batch is not None and batch["finalized_at"]:
+            return ScanResult(**json.loads(batch["result_json"]))
         # Budgets are per provider, not one shared budget. Retries and delivery
         # rechecks also spend them, so this is a lower-bound planning warning.
         daily_windows = math.ceil(24 / scanner["scan_interval_hours"]) * len(queries)
@@ -286,15 +295,15 @@ class ScanService:
                         stopped.set()
                     if not self.stop_event.is_set() and self.clock() < deadline:
                         if not dry_run:
-                            # Re-evaluate with the latest validated policy BEFORE
-                            # inserting observations, avoiding self-inclusion.
+                            # Persist candidates before storing history. The batch's
+                            # pre-scan snapshot survives retries and excludes this scan.
                             live = validate_config(self.db.get_config(self.default_config))
-                            live_evaluator = evaluator_for(self.db, live)
+                            live_evaluator = evaluator_for(self.db, live, batch=batch)
                             active = {item["code"] for item in live["monitored_destinations"]}
-                            deals = live_evaluator.evaluate_offers(offers)
                             observations = [offer for offer in offers if live_evaluator.is_eligible_route(offer)
                                             and offer.destination in active]
                             if observations:
+                                self.db.stage_scan_offers(batch["id"], observations, job=job)
                                 self.db.record_offers(observations)
                                 # Weekly historical lows include fares that did
                                 # not qualify for an immediate discounted alert.
@@ -304,17 +313,6 @@ class ScanService:
                                     scan_lease_token=job["lease_token"] if job else None,
                                 )
                                 result.observations += len(observations)
-                            if not live["filters"]["alerts_paused"]:
-                                for deal in deals:
-                                    if deal.offer.destination not in active:
-                                        continue
-                                    event = self.db.reserve_alert(deal.offer, deal.average_price_usd, deal.discount_percent,
-                                        baseline_source=deal.baseline_source, window_hours=live["filters"]["deduplication_window_hours"],
-                                        improvement_usd=live["filters"]["price_improvement_usd"],
-                                        improvement_percent=live["filters"]["price_improvement_percent"],
-                                        scan_job_id=job["id"] if job else None,
-                                        scan_lease_token=job["lease_token"] if job else None)
-                                    result.alerts_reserved += int(event is not None)
                     delay = scanner["request_delay_seconds"]
                     until = min(deadline, self.clock() + delay)
                     while delay and self.clock() < until and not should_stop():
@@ -331,5 +329,14 @@ class ScanService:
                     provider.close()
                 except Exception:
                     logger.warning("provider_close_failed")
+        if batch is not None and not result.canceled and not self.stop_event.is_set():
+            live = validate_config(self.db.get_config(self.default_config))
+            evaluator = evaluator_for(self.db, live, batch=batch)
+            from fetcher.base import FlightOffer
+            active = {item["code"] for item in live["monitored_destinations"]}
+            offers = [FlightOffer(**item) for item in self.db.scan_batch_offers(batch["id"])
+                      if item["destination"] in active]
+            deals = evaluator.evaluate_offers(offers)
+            result.alerts_reserved = self.db.finalize_scan_batch(batch["id"], deals, job=job, result=asdict(result))
         logger.info("scan_finished", extra={"offers": result.observations, "job_id": job["id"] if job else None})
         return result

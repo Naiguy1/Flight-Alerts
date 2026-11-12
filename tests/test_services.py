@@ -86,8 +86,8 @@ class ScannerTests(DatabaseFixture):
         self.assertTrue(result.success)
         self.assertEqual((result.total_windows, result.windows, result.completed_windows), (2, 2, 2))
         self.assertEqual(result.observations, 2)
-        self.assertEqual(result.alerts_reserved, 2)
-        self.assertEqual(len(self.db.dashboard_snapshot(["LHR"])["deliveries"]), 2)
+        self.assertEqual(result.alerts_reserved, 1)
+        self.assertEqual(len(self.db.dashboard_snapshot(["LHR"])["deliveries"]), 1)
         self.assertTrue(provider.closed)
 
     def test_variable_trip_durations_generate_respective_queries(self):
@@ -230,7 +230,10 @@ class ScannerTests(DatabaseFixture):
                 first_routes.append(query["destination"])
                 raise ProviderError("budget_exhausted")
             provider.fetch_offers = fail
-            result = self.service(provider).run(job={"id": job_id, "lease_token": "not-used-before30s"})
+            self.db.enqueue_scan(0)
+            job = self.db.claim_scan()
+            result = self.service(provider).run(job=job)
+            self.db.finish_scan(job["id"], job["lease_token"], result.success, error=result.error_category)
             self.assertFalse(result.success)
         self.assertNotEqual(first_routes[0], first_routes[1])
 

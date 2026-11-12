@@ -247,7 +247,7 @@ class FakeDatabase:
         return all(self.rows[row_id - 1]["lease_token"] == token
                    and self.rows[row_id - 1]["state"] == "sending" for row_id in ids)
 
-    def reserve_destination_alerts(self, ids, token, destinations):
+    def reserve_destination_alerts(self, ids, token, destinations, *, payloads=None):
         if not self.renew_delivery_group(ids, token):
             return None
         recipients = {self.rows[row_id - 1]["recipient_id"] for row_id in ids}

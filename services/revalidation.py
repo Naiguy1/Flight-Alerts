@@ -39,7 +39,10 @@ class FareRevalidator:
             return False
         config = validate_config(self.db.get_config(self.default_config))
         active = {item["code"] for item in config["monitored_destinations"]}
-        evaluator = evaluator_for(self.db, config)
+        batch = ({"baseline_at": payload["baseline_as_of"], "history_max_id": payload["history_max_id"],
+                  "id": payload.get("baseline_batch_id")}
+                 if "baseline_as_of" in payload and "history_max_id" in payload else None)
+        evaluator = evaluator_for(self.db, config, batch=batch)
         if snapshot.destination not in active or not evaluator.is_eligible_route(snapshot):
             return False
         now = self.clock()
@@ -102,7 +105,7 @@ class FareRevalidator:
         config = validate_config(self.db.get_config(self.default_config))
         if snapshot.destination not in {item["code"] for item in config["monitored_destinations"]}:
             return False
-        evaluator = evaluator_for(self.db, config)
+        evaluator = evaluator_for(self.db, config, batch=batch)
         valid = []
         for candidate in candidates:
             checked = datetime.fromisoformat(candidate.observed_at.replace("Z", "+00:00"))

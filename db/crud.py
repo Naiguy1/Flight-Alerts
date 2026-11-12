@@ -24,6 +24,36 @@ from typing import Any, Iterator
 from db.migrations import SCHEMA_VERSION, migrate
 
 
+def reference_ctes() -> str:
+    """Robust route reference over a caller-filtered `history` CTE.
+
+    One low per UTC observation day/travel-date pair, then median within each
+    day and median across days. Extra providers, expensive alternatives and
+    repeated scans cannot multiply one day's weight.
+    """
+    return """
+    ,date_lows AS (
+      SELECT origin,destination,date(COALESCE(observed_at,recorded_at)) AS day,
+             outbound_date,return_date,MIN(price_usd) AS price
+      FROM history GROUP BY origin,destination,day,outbound_date,return_date
+    ),day_ranks AS (
+      SELECT *,ROW_NUMBER() OVER (PARTITION BY origin,destination,day ORDER BY price) AS rank,
+             COUNT(*) OVER (PARTITION BY origin,destination,day) AS n FROM date_lows
+    ),daily_medians AS (
+      SELECT origin,destination,day,AVG(price) AS price FROM day_ranks
+      WHERE rank IN ((n+1)/2,(n+2)/2) GROUP BY origin,destination,day
+    ),route_ranks AS (
+      SELECT *,ROW_NUMBER() OVER (PARTITION BY origin,destination ORDER BY price) AS rank,
+             COUNT(*) OVER (PARTITION BY origin,destination) AS n FROM daily_medians
+    ),route_averages AS (
+      SELECT origin,destination,AVG(price) AS avg_price,MAX(n) AS observation_days,
+        (SELECT COUNT(*) FROM date_lows l WHERE l.origin=r.origin AND l.destination=r.destination) AS samples,
+        (SELECT COUNT(*) FROM (SELECT DISTINCT outbound_date,return_date FROM date_lows l
+          WHERE l.origin=r.origin AND l.destination=r.destination)) AS date_pairs
+      FROM route_ranks r WHERE rank IN ((n+1)/2,(n+2)/2) GROUP BY origin,destination
+    ) """
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -247,15 +277,129 @@ class DatabaseManager:
                   o["metadata_scope"], o["observed_at"]) for o in normalized],
             )
 
-    def get_historical_route_stats(self, origin: str, destination: str, lookback_days: int = 90) -> tuple[float | None, int]:
-        cutoff = _iso(_now() - timedelta(days=max(1, int(lookback_days))))
+    def get_historical_route_stats(self, origin: str, destination: str, lookback_days: int = 90,
+                                   *, as_of: str | None = None, history_max_id: int | None = None,
+                                   min_observation_days: int = 14, min_date_pairs: int = 30,
+                                   snapshot_id: int | None = None) -> tuple[float | None, int]:
+        end = datetime.fromisoformat(as_of.replace("Z", "+00:00")) if as_of else _now()
+        if end.tzinfo is not None:
+            end = end.astimezone(timezone.utc).replace(tzinfo=None)
+        cutoff = _iso(end - timedelta(days=max(1, int(lookback_days))))
         with self._read() as connection:
-            row = connection.execute(
-                "SELECT AVG(price_usd),COUNT(*) FROM price_history WHERE origin=? AND destination=? "
-                "AND recorded_at>=? AND currency='USD' AND price_usd>0 AND price_usd<=10000000",
-                (origin, destination, cutoff),
-            ).fetchone()
-            return (float(row[0]) if row[0] is not None else None, row[1])
+            if snapshot_id is not None:
+                row = connection.execute("SELECT reference_usd AS avg_price,samples,observation_days,date_pairs "
+                    "FROM scan_baselines WHERE batch_id=? AND origin=? AND destination=?",
+                    (snapshot_id, origin, destination)).fetchone()
+            else:
+                row = connection.execute(
+                    "WITH history AS (SELECT * FROM price_history WHERE origin=? AND destination=? "
+                    "AND julianday(COALESCE(observed_at,recorded_at)) BETWEEN julianday(?) AND julianday(?) "
+                    "AND recorded_at<=? AND (? IS NULL OR id<=?) AND outbound_date>=? "
+                    "AND currency='USD' AND price_usd>0 AND price_usd<=1000000) "
+                    + reference_ctes() + "SELECT * FROM route_averages",
+                    (origin, destination, cutoff, _iso(end), _iso(end), history_max_id, history_max_id,
+                     end.date().isoformat()),
+                ).fetchone()
+            if row is None:
+                return None, 0
+            covered = row["observation_days"] >= min_observation_days and row["date_pairs"] >= min_date_pairs
+            return (float(row["avg_price"]) if covered else None, row["samples"])
+
+    def begin_scan_batch(self, job: dict | None = None) -> dict:
+        with self._write() as connection:
+            now = _iso()
+            if not self._owns_scan(connection, (job or {}).get("id"), (job or {}).get("lease_token"), now):
+                raise RuntimeError("Scan lease ownership was lost")
+            row = connection.execute("SELECT * FROM scan_batches WHERE scan_job_id=?", ((job or {}).get("id"),)).fetchone()
+            if row is None:
+                maximum = connection.execute("SELECT COALESCE(MAX(id),0) FROM price_history").fetchone()[0]
+                identifier = connection.execute(
+                    "INSERT INTO scan_batches(scan_job_id,baseline_at,history_max_id) VALUES(?,?,?)",
+                    ((job or {}).get("id"), now, maximum)).lastrowid
+                references = connection.execute(
+                    "WITH history AS (SELECT * FROM price_history WHERE id<=? "
+                    "AND julianday(COALESCE(observed_at,recorded_at)) BETWEEN julianday(?) AND julianday(?) "
+                    "AND recorded_at<=? AND outbound_date>=? AND currency='USD' "
+                    "AND price_usd>0 AND price_usd<=1000000) " + reference_ctes() + "SELECT * FROM route_averages",
+                    (maximum, _iso(_now()-timedelta(days=90)), now, now, _now().date().isoformat())).fetchall()
+                connection.executemany("INSERT INTO scan_baselines VALUES(?,?,?,?,?,?,?)",
+                    [(identifier, r["origin"], r["destination"], r["avg_price"], r["samples"],
+                      r["observation_days"], r["date_pairs"]) for r in references])
+                row = connection.execute("SELECT * FROM scan_batches WHERE id=?", (identifier,)).fetchone()
+            return dict(row)
+
+    def stage_scan_offers(self, batch_id: int, offers: list, *, job: dict | None = None) -> None:
+        normalized = [_offer_dict(offer) for offer in offers]
+        with self._write() as connection:
+            if not self._owns_batch(connection, batch_id, job):
+                raise RuntimeError("Scan lease ownership was lost")
+            connection.executemany(
+                "INSERT INTO scan_candidates VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(batch_id,origin,destination,outbound_date,return_date) DO UPDATE SET "
+                "price_usd=excluded.price_usd,offer_json=excluded.offer_json "
+                "WHERE excluded.price_usd<scan_candidates.price_usd",
+                [(batch_id, o["origin"], o["destination"], o["outbound_date"], o["return_date"],
+                  o["price_usd"], _json(o)) for o in normalized])
+
+    def _owns_batch(self, connection, batch_id, job):
+        row = connection.execute("SELECT * FROM scan_batches WHERE id=?", (batch_id,)).fetchone()
+        return (row is not None and row["finalized_at"] is None
+                and row["scan_job_id"] == (job or {}).get("id")
+                and self._owns_scan(connection, (job or {}).get("id"), (job or {}).get("lease_token"), _iso()))
+
+    def scan_batch_offers(self, batch_id: int) -> list[dict]:
+        with self._read() as connection:
+            return [json.loads(row[0]) for row in connection.execute(
+                "SELECT offer_json FROM scan_candidates WHERE batch_id=? ORDER BY price_usd,origin,outbound_date,return_date",
+                (batch_id,))]
+
+    def finalize_scan_batch(self, batch_id: int, deals: list, *, job: dict | None = None,
+                            result: dict | None = None) -> int:
+        """Publish destination summaries atomically, once, after queries finish."""
+        grouped = {}
+        for deal in sorted(deals, key=lambda d: (d.offer.price_usd, d.offer.origin, d.offer.outbound_date, d.offer.return_date)):
+            grouped.setdefault(deal.offer.destination, []).append(deal)
+        with self._write() as connection:
+            if not self._owns_batch(connection, batch_id, job):
+                return 0
+            batch = connection.execute("SELECT * FROM scan_batches WHERE id=?", (batch_id,)).fetchone()
+            config_row = connection.execute("SELECT value_json FROM app_config WHERE id=1").fetchone()
+            paused = config_row and json.loads(config_row[0]).get("filters", {}).get("alerts_paused", False)
+            recipients = connection.execute("SELECT id FROM recipients WHERE enabled=1 AND verified=1").fetchall()
+            now, count = _iso(), 0
+            if not paused and recipients:
+                for destination, options in sorted(grouped.items()):
+                    best = options[0]
+                    items = [{"offer": _offer_dict(d.offer), "average_price_usd": d.average_price_usd,
+                              "discount_percent": d.discount_percent, "baseline_source": d.baseline_source,
+                              "baseline_as_of": batch["baseline_at"], "history_max_id": batch["history_max_id"]}
+                             for d in options[:100]]
+                    for item in items:
+                        item["baseline_batch_id"] = batch_id
+                    payload = {"destination_summary": True, "deals": items, "scan_batch_id": batch_id,
+                               "total_options": len(options), "scan_partial": bool(result and
+                                   result.get("completed_windows") != result.get("total_windows"))}
+                    # Keep email payloads bounded; preserve every candidate in SQLite.
+                    while True:
+                        try:
+                            encoded = _json(payload)
+                            break
+                        except ValueError:
+                            if len(items) <= 1:
+                                raise
+                            items.pop()
+                    alert_id, _ = self._insert_alert(connection, _offer_dict(best.offer), best.average_price_usd,
+                        best.discount_percent, best.baseline_source, now)
+                    connection.execute("UPDATE alert_logs SET payload=? WHERE id=?", (encoded, alert_id))
+                    for recipient in recipients:
+                        self._enqueue(connection, recipient[0], "digest", payload,
+                            f"scan:{batch_id}:{destination}:{recipient[0]}", now, alert_id=alert_id)
+                    count += 1
+            outcome = dict(result or {})
+            outcome["alerts_reserved"] = count
+            connection.execute("UPDATE scan_batches SET finalized_at=?,result_json=? WHERE id=?",
+                               (now, _json(outcome), batch_id))
+            return count
 
     @staticmethod
     def _duplicate(connection, origin, destination, outbound_date, return_date, current_price,
@@ -556,6 +700,7 @@ class DatabaseManager:
 
     def reserve_destination_alerts(
         self, delivery_ids: list[int], lease_token: str, destinations: set[str],
+        *, payloads: dict[int, dict] | None = None,
     ) -> set[str] | None:
         """Atomically admit a live email: 72h spacing and <=2 per rolling 7d.
 
@@ -572,15 +717,43 @@ class DatabaseManager:
             now = _now()
             placeholders = ",".join("?" for _ in delivery_ids)
             rows = connection.execute(
-                f"SELECT recipient_id FROM deliveries WHERE id IN ({placeholders}) "
+                f"SELECT id,recipient_id,kind,payload FROM deliveries WHERE id IN ({placeholders}) "
                 "AND status='sending' AND lease_token=? AND lease_expires_at>?",
                 (*delivery_ids, lease_token, _iso(now)),
             ).fetchall()
-            if len(rows) != len(delivery_ids) or len({row[0] for row in rows}) != 1:
+            if len(rows) != len(delivery_ids) or len({row["recipient_id"] for row in rows}) != 1:
                 return None
-            recipient_id = rows[0][0]
+            recipient_id = rows[0]["recipient_id"]
+            current_payloads = {row["id"]: (payloads[row["id"]] if payloads is not None else json.loads(row["payload"]))
+                                for row in rows}
+            prices = {}
+            for row in rows:
+                payload = current_payloads[row["id"]]
+                items = payload.get("deals", []) if row["kind"] == "digest" else [payload]
+                for item in items:
+                    destination = item["offer"]["destination"].strip().upper()
+                    price = _positive(item["offer"]["price_usd"])
+                    prices[destination] = min(prices.get(destination, price), price)
+            sent_prices = {}
+            for sent in connection.execute(
+                "SELECT kind,payload FROM deliveries WHERE recipient_id=? AND status='sent' "
+                "AND kind IN ('deal','digest') AND sent_at>?", (recipient_id, _iso(now - timedelta(days=7)))):
+                previous = json.loads(sent["payload"])
+                if not isinstance(previous, dict):
+                    continue
+                if previous.get("weekly") is True:
+                    continue
+                for item in previous.get("deals", []) if sent["kind"] == "digest" else [previous]:
+                    try:
+                        destination = item["offer"]["destination"].strip().upper()
+                        price = _positive(item["offer"]["price_usd"])
+                    except (ValueError, TypeError, KeyError, AttributeError):
+                        continue  # Legacy malformed payloads cannot establish a price floor.
+                    sent_prices[destination] = min(sent_prices.get(destination, price), price)
             allowed = set()
             for destination in sorted(destinations):
+                if destination in sent_prices and sent_prices[destination] <= prices.get(destination, float("inf")):
+                    continue
                 count, latest = connection.execute(
                     "SELECT COUNT(*),MAX(attempted_at) FROM destination_alert_sends "
                     "WHERE recipient_id=? AND destination=? AND attempted_at>?",
@@ -593,6 +766,14 @@ class DatabaseManager:
                     "VALUES(?,?,?,?,?)", (recipient_id, destination, delivery_ids[0], lease_token, _iso(now)),
                 )
                 allowed.add(destination)
+            # Persist exactly the refreshed content about to be sent. A later
+            # weekly price comparison must use actual sent fares, not discovery prices.
+            for row in rows:
+                payload = dict(current_payloads[row["id"]])
+                if row["kind"] == "digest":
+                    payload["deals"] = [item for item in payload.get("deals", [])
+                                        if item["offer"]["destination"].strip().upper() in allowed]
+                connection.execute("UPDATE deliveries SET payload=? WHERE id=?", (_json(payload), row["id"]))
             return allowed
 
     def release_destination_alerts(self, delivery_id: int, lease_token: str) -> None:
@@ -768,27 +949,27 @@ class DatabaseManager:
                 alert["payload"] = json.loads(alert["payload"])
             recent, stats = [], []
             if codes:
+                config_row = connection.execute("SELECT value_json FROM app_config WHERE id=1").fetchone()
+                filters = json.loads(config_row[0]).get("filters", {}) if config_row else {}
                 placeholders = ",".join("?" for _ in codes)
                 origins = sorted({code for code in (active_origins or [])
                                   if re.fullmatch(r"[A-Z]{3}", str(code))})[:10]
                 origin_filter = ""
-                parameters = [*codes, cutoff, _iso(now)]
+                parameters = [*codes, cutoff, _iso(now), now.date().isoformat()]
                 if active_origins is not None:
                     if origins:
                         origin_filter = " AND origin IN (" + ",".join("?" for _ in origins) + ")"
                         parameters.extend(origins)
                     else:
                         origin_filter = " AND 0"
-                # Include historical travel dates in the reference, normalize UTC
-                # offsets, and exclude invalid/future observations and prices.
+                # Use the same robust reference as alert evaluation. The dashboard
+                # is a current view; alert payloads preserve their pre-scan snapshot.
                 history = (
                     "WITH history AS (SELECT *,julianday(COALESCE(observed_at,recorded_at)) AS observed_jd "
                     f"FROM price_history WHERE destination IN ({placeholders}) "
                     "AND julianday(COALESCE(observed_at,recorded_at)) BETWEEN julianday(?) AND julianday(?) "
-                    "AND currency='USD' AND price_usd>0 AND price_usd<=10000000"
-                    + origin_filter + "), route_averages AS ("
-                    "SELECT origin,destination,COUNT(*) AS samples,AVG(price_usd) AS avg_price "
-                    "FROM history GROUP BY origin,destination) "
+                    "AND outbound_date>=? AND currency='USD' AND price_usd>0 AND price_usd<=1000000"
+                    + origin_filter + ") " + reference_ctes()
                 )
                 recent = [dict(row) for row in connection.execute(
                     history + ",batches AS (SELECT *,MAX(observed_jd) OVER ("
@@ -801,9 +982,11 @@ class DatabaseManager:
                     "(1.0-f.price_usd/r.avg_price)*100.0 AS discount_percent "
                     "FROM latest f JOIN route_averages r USING(origin,destination) "
                     "WHERE f.observation_rank=1 AND f.outbound_date>=? "
+                    "AND r.samples>=? AND r.observation_days>=? AND r.date_pairs>=? "
                     "AND f.price_usd<=r.avg_price*0.5 "
                     "ORDER BY discount_percent DESC,f.observed_jd DESC,f.id DESC LIMIT 12",
-                    [*parameters, now.date().isoformat()])]
+                    [*parameters, now.date().isoformat(), filters.get("min_historical_samples_for_db_avg", 15),
+                     filters.get("historical_min_observation_days", 14), filters.get("historical_min_date_pairs", 30)])]
                 for row in recent:
                     row["airlines"] = row["airlines"].split(", ") if row["airlines"] else []
                 stats = [dict(row) for row in connection.execute(
@@ -835,6 +1018,7 @@ class DatabaseManager:
             removed += connection.execute("DELETE FROM provider_cache WHERE updated_at<?", (_iso(_now() - timedelta(days=1)),)).rowcount
             removed += connection.execute("DELETE FROM destination_alert_sends WHERE attempted_at<=?",
                                           (_iso(_now() - timedelta(days=7)),)).rowcount
+            removed += connection.execute("DELETE FROM scan_batches WHERE scan_job_id IS NULL AND baseline_at<?", (cutoff,)).rowcount
             removed += connection.execute("DELETE FROM service_leases WHERE lease_expires_at<?", (_iso(),)).rowcount
             return removed
 
