@@ -149,7 +149,7 @@ jobs:
       - name: Verify private request data stays out of proxy outage logs
         run: python3 -m tools.test_proxy_privacy
       - name: Scan release-blocking image vulnerabilities
-        uses: aquasecurity/trivy-action@8f28faec26515256b6d22074d1d2a8986f4cbd87
+        uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec
         with:
           image-ref: flight-alerts:ci
           version: v0.76.1
@@ -163,7 +163,7 @@ jobs:
         run: python3 -m tools.ci_security_report trivy trivy-results.json
       - name: Scan hardened proxy image
         if: always()
-        uses: aquasecurity/trivy-action@8f28faec26515256b6d22074d1d2a8986f4cbd87
+        uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec
         with:
           image-ref: flight-alerts-proxy:ci
           version: v0.76.1
@@ -178,7 +178,7 @@ jobs:
         run: python3 -m tools.ci_security_report trivy trivy-proxy-results.json
       - name: Generate image SBOM
         if: always()
-        uses: aquasecurity/trivy-action@8f28faec26515256b6d22074d1d2a8986f4cbd87
+        uses: aquasecurity/trivy-action@38b337fff0a2f984d5be173c99e3f633438167ec
         with:
           image-ref: flight-alerts:ci
           version: v0.76.1
